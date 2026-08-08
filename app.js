@@ -169,8 +169,14 @@ function parseMoney(str){
   const v = parseFloat(cleaned);
   return isNaN(v) ? 0 : v;
 }
+function localISO(d){
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2,'0');
+  const day = String(d.getDate()).padStart(2,'0');
+  return `${y}-${m}-${day}`;
+}
 function todayStr(){
-  return new Date().toISOString().slice(0,10);
+  return localISO(new Date());
 }
 function fmtDate(d){
   if (!d) return '';
@@ -318,7 +324,7 @@ async function importExcel(e){
   navigate(currentView);
 }
 function normalizeDate(v){
-  if (v instanceof Date) return v.toISOString().slice(0,10);
+  if (v instanceof Date) return localISO(v);
   if (typeof v === 'number'){ // excel serial date
     const d = XLSX.SSF.parse_date_code(v);
     return `${d.y}-${String(d.m).padStart(2,'0')}-${String(d.d).padStart(2,'0')}`;
@@ -1150,7 +1156,7 @@ function setDay(date, day){
   d.setDate(Math.min(day, maxDay));
   return d;
 }
-function iso(d){ return d.toISOString().slice(0,10); }
+function iso(d){ return localISO(d); }
 
 function buildSchedule(g, info){
   const schedule = [];
