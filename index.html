@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, viewport-fit=cover">
+<title>MoneyTracker</title>
+
+<!-- Home-screen / PWA behavior on phones (iOS + Android) -->
+<link rel="manifest" href="manifest.json">
+<meta name="theme-color" content="#182420">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="MoneyTracker">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<link rel="icon" href="icon-192.png" type="image/png">
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+<!-- SheetJS for Excel import/export -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+</head>
+<body>
+
+<div class="app">
+
+  <!-- ============ SIDEBAR ============ -->
+  <nav class="sidebar" id="sidebar">
+    <div class="brand">
+      <span class="brand-mark">₱</span>
+      <span class="brand-name">MoneyTracker</span>
+    </div>
+
+    <div class="nav-group">
+      <button class="nav-btn" data-view="report">
+        <span class="nav-icon">▤</span><span>Report</span>
+      </button>
+      <button class="nav-btn" data-view="income">
+        <span class="nav-icon">＋</span><span>Income</span>
+      </button>
+      <button class="nav-btn" data-view="expense">
+        <span class="nav-icon">－</span><span>Expense</span>
+      </button>
+      <button class="nav-btn" data-view="transfer">
+        <span class="nav-icon">⇄</span><span>Transfer</span>
+      </button>
+      <button class="nav-btn" data-view="loan">
+        <span class="nav-icon">◈</span><span>Loan</span>
+      </button>
+    </div>
+
+    <div class="nav-group nav-group--bottom">
+      <button class="nav-btn nav-btn--ghost" id="btnExport">
+        <span class="nav-icon">↓</span><span>Export Excel</span>
+      </button>
+      <label class="nav-btn nav-btn--ghost" id="btnImportLabel">
+        <span class="nav-icon">↑</span><span>Import Excel</span>
+        <input type="file" id="fileImport" accept=".xlsx,.xls" hidden>
+      </label>
+      <button class="nav-btn nav-btn--ghost" id="btnClear">
+        <span class="nav-icon">🗑</span><span>Clear Transaction</span>
+      </button>
+    </div>
+  </nav>
+
+  <!-- ============ MOBILE TOP BAR ============ -->
+  <header class="mobile-bar">
+    <div class="mobile-bar-brand">
+      <span class="brand-mark">₱</span>
+      <span class="brand-name">MoneyTracker</span>
+    </div>
+    <div class="mobile-bar-actions">
+      <button class="mbar-btn" id="btnExportMobile" title="Export Excel">↓</button>
+      <label class="mbar-btn" id="btnImportLabelMobile" title="Import Excel">↑
+        <input type="file" id="fileImportMobile" accept=".xlsx,.xls" hidden>
+      </label>
+      <button class="mbar-btn" id="btnClearMobile" title="Clear Transaction">🗑</button>
+    </div>
+  </header>
+
+  <!-- ============ MAIN ============ -->
+  <main class="main" id="main">
+    <!-- view content injected here -->
+  </main>
+
+  <!-- ============ MOBILE BOTTOM NAV ============ -->
+  <nav class="mobile-nav">
+    <button class="mnav-btn" data-view="report"><span class="nav-icon">▤</span><small>Report</small></button>
+    <button class="mnav-btn" data-view="income"><span class="nav-icon">＋</span><small>Income</small></button>
+    <button class="mnav-btn" data-view="expense"><span class="nav-icon">－</span><small>Expense</small></button>
+    <button class="mnav-btn" data-view="transfer"><span class="nav-icon">⇄</span><small>Transfer</small></button>
+    <button class="mnav-btn" data-view="loan"><span class="nav-icon">◈</span><small>Loan</small></button>
+  </nav>
+
+</div>
+
+<!-- ============ MODAL ROOT ============ -->
+<div class="modal-overlay" id="modalOverlay">
+  <div class="modal" id="modal"></div>
+</div>
+
+<!-- ============ TOAST ============ -->
+<div class="toast" id="toast"></div>
+
+<script src="app.js"></script>
+</body>
+</html>

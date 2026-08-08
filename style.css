@@ -1,0 +1,384 @@
+/* ============================================================
+   MoneyTracker — Design tokens
+   Concept: a working ledger book. Ink-dark spine (sidebar) holds
+   the sections; the page itself is a cool parchment canvas;
+   figures are set in mono for honest column alignment.
+   ============================================================ */
+:root{
+  --ink:        #182420;
+  --ink-2:      #223229;
+  --paper:      #EDEFE7;
+  --card:       #FFFFFF;
+  --line:       #D8DBCC;
+  --line-soft:  #E7E9DE;
+  --text:       #202821;
+  --text-dim:   #64705F;
+  --text-faint: #97A08C;
+
+  --income:     #2F6D4C;
+  --income-bg:  #E4EFE6;
+  --expense:    #A03F2A;
+  --expense-bg: #F3E4DF;
+  --transfer:   #2C5A82;
+  --transfer-bg:#E1EAF1;
+  --loan:       #8A6A2A;
+  --loan-bg:    #F1E9D6;
+
+  --danger:     #A03F2A;
+  --radius:     10px;
+  --radius-sm:  6px;
+  --shadow:     0 1px 2px rgba(24,36,32,.06), 0 8px 24px -12px rgba(24,36,32,.18);
+
+  --font-display: 'Space Grotesk', sans-serif;
+  --font-body: 'Inter', sans-serif;
+  --font-mono: 'IBM Plex Mono', monospace;
+}
+
+*{ box-sizing: border-box; }
+html,body{ height:100%; }
+body{
+  margin:0;
+  font-family: var(--font-body);
+  background: var(--paper);
+  color: var(--text);
+  -webkit-font-smoothing: antialiased;
+}
+button, input, select{ font-family: inherit; }
+button{ cursor:pointer; }
+
+::selection{ background: #C9D8CB; }
+
+/* ============ APP SHELL ============ */
+.app{
+  display:flex;
+  min-height:100vh;
+}
+
+/* ============ SIDEBAR (desktop, ~1/4 width) ============ */
+.sidebar{
+  width: 250px;
+  flex-shrink:0;
+  background: var(--ink);
+  color: #EDF0E8;
+  display:flex;
+  flex-direction:column;
+  padding: 22px 14px;
+  position: sticky;
+  top:0;
+  height:100vh;
+}
+.brand{
+  display:flex;
+  align-items:center;
+  gap:10px;
+  padding: 4px 10px 26px;
+}
+.brand-mark{
+  font-family: var(--font-display);
+  font-size: 22px;
+  width:34px; height:34px;
+  display:flex; align-items:center; justify-content:center;
+  background: #2C3E33;
+  border-radius: 8px;
+  color:#D9E4CE;
+}
+.brand-name{
+  font-family: var(--font-display);
+  font-weight:600;
+  font-size: 16.5px;
+  letter-spacing: .2px;
+}
+.nav-group{ display:flex; flex-direction:column; gap:3px; }
+.nav-group--bottom{ margin-top:auto; padding-top: 14px; border-top:1px solid rgba(255,255,255,.09); }
+
+.nav-btn{
+  display:flex; align-items:center; gap:12px;
+  background:transparent;
+  border:none;
+  color:#CBD3C4;
+  padding: 11px 12px;
+  border-radius: 8px;
+  font-size: 14.5px;
+  font-weight:500;
+  text-align:left;
+  border-left: 3px solid transparent;
+  transition: background .15s ease, color .15s ease;
+}
+.nav-btn .nav-icon{ width:18px; text-align:center; font-size:15px; opacity:.85; }
+.nav-btn:hover{ background: rgba(255,255,255,.06); color:#fff; }
+.nav-btn.active{ background: rgba(255,255,255,.1); color:#fff; border-left-color:#D9E4CE; }
+.nav-btn--ghost{ font-size:13.5px; color:#9FAA92; }
+.nav-btn--ghost:hover{ color:#EDF0E8; }
+input[type="file"]{ display:none; }
+
+/* ============ MOBILE BARS (hidden on desktop) ============ */
+.mobile-bar, .mobile-nav{ display:none; }
+.mobile-bar-brand{ display:flex; align-items:center; gap:9px; }
+.mobile-bar-actions{ display:flex; align-items:center; gap:6px; }
+.mbar-btn{
+  background: rgba(255,255,255,.09); border:none; color:#EDF0E8;
+  width:32px; height:32px; border-radius:8px; font-size:14px;
+  display:flex; align-items:center; justify-content:center;
+  cursor:pointer; position:relative;
+}
+.mbar-btn:active{ background: rgba(255,255,255,.2); }
+
+/* ============ FILTER ROW (Income / Expense / Loan) ============ */
+.filter-row{ display:flex; gap:10px; flex-wrap:wrap; margin-bottom:16px; }
+.filter-row select{
+  padding: 8px 11px;
+  border:1px solid var(--line);
+  border-radius: var(--radius-sm);
+  font-size:13px;
+  background:#fff;
+  color: var(--text-dim);
+  max-width: 100%;
+}
+
+/* ============ MAIN ============ */
+.main{
+  flex:1;
+  min-width:0;
+  padding: 28px 34px 60px;
+}
+.view-header{
+  display:flex; align-items:center; justify-content:space-between;
+  gap: 16px; flex-wrap:wrap;
+  margin-bottom: 20px;
+}
+.view-title{
+  font-family: var(--font-display);
+  font-size: 22px;
+  font-weight:600;
+  color: var(--ink);
+  margin:0;
+}
+.view-sub{ font-size:12.5px; color:var(--text-dim); margin-top:2px; }
+
+.btn{
+  display:inline-flex; align-items:center; gap:7px;
+  padding: 9px 16px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--line);
+  background: var(--card);
+  color: var(--text);
+  font-size: 13.5px;
+  font-weight:600;
+  transition: transform .1s ease, box-shadow .15s ease;
+}
+.btn:hover{ box-shadow: var(--shadow); }
+.btn:active{ transform: translateY(1px); }
+.btn-primary{ background: var(--ink); color:#fff; border-color:var(--ink); }
+.btn-primary.income{ background:var(--income); border-color:var(--income); }
+.btn-primary.expense{ background:var(--expense); border-color:var(--expense); }
+.btn-primary.transfer{ background:var(--transfer); border-color:var(--transfer); }
+.btn-primary.loan{ background:var(--loan); border-color:var(--loan); }
+.btn-small{ padding:5px 10px; font-size:12px; }
+.btn-danger{ color: var(--danger); border-color: #E4C7BE; background:#fff; }
+.btn-ghost{ background:transparent; border-color:transparent; color:var(--text-dim); }
+
+/* ============ CARDS / SUMMARY ============ */
+.summary-row{
+  display:flex; gap:14px; flex-wrap:wrap;
+  margin-bottom: 22px;
+}
+.stat-card{
+  background: var(--card);
+  border:1px solid var(--line-soft);
+  border-radius: var(--radius);
+  padding: 14px 18px;
+  min-width: 150px;
+  flex:1;
+}
+.stat-card .label{ font-size:11.5px; text-transform:uppercase; letter-spacing:.06em; color:var(--text-faint); }
+.stat-card .value{ font-family: var(--font-mono); font-size:19px; font-weight:600; margin-top:5px; }
+.stat-card.income .value{ color:var(--income); }
+.stat-card.expense .value{ color:var(--expense); }
+.stat-card.loan .value{ color:var(--loan); }
+
+/* ============ TABLE ============ */
+.table-wrap{
+  background: var(--card);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+table{ width:100%; border-collapse:collapse; font-size:13.5px; }
+thead th{
+  text-align:left;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing:.05em;
+  color: var(--text-dim);
+  background: var(--line-soft);
+  padding: 10px 14px;
+  font-weight:600;
+  white-space:nowrap;
+}
+tbody td{
+  padding: 9px 14px;
+  border-top: 1px solid var(--line-soft);
+  vertical-align:middle;
+  white-space:nowrap;
+}
+tbody tr{ transition: background .1s ease; }
+tbody tr:hover{ background: #F7F8F3; cursor:pointer; }
+tbody tr.no-hover:hover{ background:transparent; cursor:default; }
+.num{ font-family: var(--font-mono); text-align:right; }
+.tag{
+  display:inline-block; padding:2px 8px; border-radius:100px;
+  font-size:11px; font-weight:600;
+}
+.tag.income{ background:var(--income-bg); color:var(--income); }
+.tag.expense{ background:var(--expense-bg); color:var(--expense); }
+.tag.transfer{ background:var(--transfer-bg); color:var(--transfer); }
+.tag.loan{ background:var(--loan-bg); color:var(--loan); }
+.empty-row td{ text-align:center; color:var(--text-faint); padding: 34px; }
+.row-actions{ text-align:right; }
+.icon-btn{
+  background:transparent; border:none; color:var(--text-faint);
+  padding:4px 6px; border-radius:5px; font-size:14px;
+}
+.icon-btn:hover{ color: var(--danger); background:#F3E4DF; }
+
+/* ============ FORM / MODAL ============ */
+.modal-overlay{
+  display:none;
+  position:fixed; inset:0;
+  background: rgba(20,28,24,.42);
+  z-index: 50;
+  align-items:flex-start; justify-content:center;
+  overflow-y:auto;
+  padding: 40px 16px;
+}
+.modal-overlay.open{ display:flex; }
+.modal{
+  background: var(--card);
+  width: 100%;
+  max-width: 520px;
+  border-radius: var(--radius);
+  box-shadow: 0 20px 60px -10px rgba(0,0,0,.35);
+  padding: 24px 26px 26px;
+}
+.modal.wide{ max-width: 640px; }
+.modal-title{
+  font-family: var(--font-display);
+  font-size:18px; font-weight:600;
+  margin:0 0 4px;
+}
+.modal-close-row{ display:flex; justify-content:space-between; align-items:flex-start; }
+.modal-x{ background:none; border:none; font-size:20px; color:var(--text-faint); line-height:1; padding:2px; }
+
+.field{ margin-bottom: 14px; position:relative; }
+.field label{
+  display:block; font-size:12px; font-weight:600;
+  color: var(--text-dim); margin-bottom:5px;
+}
+.field input[type="text"],
+.field input[type="number"],
+.field input[type="date"],
+.field select,
+.field textarea{
+  width:100%;
+  padding: 9px 11px;
+  border:1px solid var(--line);
+  border-radius: var(--radius-sm);
+  font-size:14px;
+  background:#FCFCFA;
+  color: var(--text);
+}
+.field textarea{ resize:vertical; min-height:56px; font-family:inherit; }
+.field input:focus, .field select:focus, .field textarea:focus{
+  outline:none; border-color:#8FA085; background:#fff;
+}
+.field-row{ display:flex; gap:12px; }
+.field-row .field{ flex:1; }
+.autocomplete-list{
+  position:absolute; top:100%; left:0; right:0;
+  background:#fff; border:1px solid var(--line);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow);
+  max-height:160px; overflow-y:auto; z-index:5;
+  display:none;
+}
+.autocomplete-list.open{ display:block; }
+.autocomplete-list div{ padding:8px 11px; font-size:13.5px; }
+.autocomplete-list div:hover{ background: var(--line-soft); }
+.hint{ font-size:11.5px; color:var(--text-faint); margin-top:4px; }
+.modal-actions{ display:flex; justify-content:flex-end; gap:10px; margin-top:18px; }
+
+.radio-group{ display:flex; gap:8px; flex-wrap:wrap; }
+.radio-chip{
+  border:1px solid var(--line); background:#fff;
+  padding:7px 13px; border-radius:100px; font-size:13px; font-weight:500;
+  color: var(--text-dim);
+}
+.radio-chip.active{ background: var(--ink); color:#fff; border-color:var(--ink); }
+
+/* ============ LOAN DETAIL / SCHEDULE ============ */
+.loan-summary-grid{
+  display:grid; grid-template-columns: repeat(2,1fr);
+  gap: 10px 18px; margin-bottom:16px;
+  padding: 14px 16px; background: var(--loan-bg); border-radius: var(--radius-sm);
+}
+.loan-summary-grid div{ font-size:12.5px; }
+.loan-summary-grid b{ display:block; font-family:var(--font-mono); font-size:15px; color:var(--ink); }
+.schedule-row{
+  display:flex; align-items:center; gap:10px;
+  padding: 9px 4px; border-top:1px solid var(--line-soft);
+  font-size:13.5px;
+}
+.schedule-row.paid{ opacity:.55; }
+.schedule-row .seq{ width:22px; color:var(--text-faint); font-family:var(--font-mono); font-size:12px; }
+.schedule-row .sdate{ width:92px; font-family:var(--font-mono); }
+.schedule-row .samt{ width:100px; font-family:var(--font-mono); text-align:right; }
+.schedule-row .sadd{ width:100px; }
+.schedule-row .sadd input{
+  width:100%; padding:5px 7px; font-size:12.5px;
+  border:1px solid var(--line); border-radius:5px;
+}
+.schedule-row input[type="checkbox"]{ width:16px; height:16px; accent-color: var(--loan); }
+
+/* ============ TOAST ============ */
+.toast{
+  position:fixed; bottom:22px; left:50%; transform: translateX(-50%) translateY(20px);
+  background: var(--ink); color:#fff; padding:10px 18px;
+  border-radius: 100px; font-size:13.5px;
+  opacity:0; pointer-events:none;
+  transition: opacity .2s ease, transform .2s ease;
+  z-index: 80;
+}
+.toast.show{ opacity:1; transform: translateX(-50%) translateY(0); }
+
+/* ============ RESPONSIVE ============ */
+@media (max-width: 860px){
+  .sidebar{ display:none; }
+  .mobile-bar{
+    display:flex; align-items:center; justify-content:space-between;
+    padding: 12px 14px;
+    padding-top: calc(12px + env(safe-area-inset-top));
+    background: var(--ink); color:#fff;
+    position:sticky; top:0; z-index:10;
+  }
+  .mobile-bar .brand-mark{ width:26px; height:26px; font-size:16px; }
+  .mobile-bar .brand-name{ font-size:14.5px; }
+  .app{ flex-direction:column; }
+  .main{ padding: 18px 14px 90px; }
+  .mobile-nav{
+    display:flex; justify-content:space-around;
+    position:fixed; bottom:0; left:0; right:0;
+    background: var(--ink);
+    padding: 8px 4px calc(8px + env(safe-area-inset-bottom));
+    z-index: 10;
+  }
+  .mnav-btn{
+    background:none; border:none; color:#9FAA92;
+    display:flex; flex-direction:column; align-items:center; gap:2px;
+    font-size:10px; padding:4px 8px; border-radius:8px;
+  }
+  .mnav-btn.active{ color:#fff; }
+  .mnav-btn .nav-icon{ font-size:16px; }
+  .table-wrap{ overflow-x:auto; }
+  .field-row{ flex-direction:column; gap:0; }
+  .loan-summary-grid{ grid-template-columns: 1fr 1fr; }
+}
