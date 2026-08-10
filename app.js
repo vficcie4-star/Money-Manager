@@ -393,7 +393,10 @@ function suggestSubCategoriesForType(type){ return uniq(allTx.filter(t=>t.transa
 /* =============================================================================
    REPORT VIEW — per-account Income/Expense/Transfer/Balance, with custom groups
    ============================================================================= */
-function accountStats(){
+// Store current date filter state
+const reportFilter = { startDate: '', endDate: '' };
+
+function accountStats(startDate, endDate){
   // stats keyed by account name, built only from Income/Expense/Transfer rows
   const stats = {};
   function bump(name, field, amt){
@@ -401,7 +404,16 @@ function accountStats(){
     if (!stats[name]) stats[name] = { income:0, expense:0, transferIn:0, transferOut:0 };
     stats[name][field] += amt;
   }
-  ledgerTx().forEach(t => {
+  
+  // Filter transactions by date range
+  const filteredTx = ledgerTx().filter(t => {
+    if (!t.date) return true;
+    if (startDate && t.date < startDate) return false;
+    if (endDate && t.date > endDate) return false;
+    return true;
+  });
+  
+  filteredTx.forEach(t => {
     const amt = Number(t.amount||0);
     if (t.transactionType === 'Income') bump(t.toAccount, 'income', amt);
     else if (t.transactionType === 'Expense') bump(t.fromAccount, 'expense', amt);
@@ -416,6 +428,7 @@ function accountStats(){
   });
   return out;
 }
+
 function sumStats(list){
   return list.reduce((acc, s) => ({
     income: acc.income + s.income, expense: acc.expense + s.expense,
@@ -452,7 +465,9 @@ let expandedGroups = new Set();
 
 function renderReport(){
   const main = document.getElementById('main');
-  const stats = accountStats();
+  
+  // Get stats with date filter applied
+  const stats = accountStats(reportFilter.startDate, reportFilter.endDate);
   const allAccountNames = Object.keys(stats);
   const grouped = new Set();
   allGroups.forEach(g => g.accounts.forEach(a => grouped.add(a)));
@@ -471,6 +486,22 @@ function renderReport(){
   let ungroupedRows = ungrouped.map(name => statsRowHtml(name, stats[name])).join('');
   const wallet = walletBalance(stats);
 
+  // Build date filter HTML
+  const dateFilterHtml = `
+    <div class="filter-row" style="margin-bottom:12px">
+      <label style="display:flex;align-items:center;gap:6px;font-size:13px;color:var(--text-dim)">
+        From:
+        <input type="date" id="reportStartDate" value="${reportFilter.startDate}" style="padding:6px 10px;border:1px solid var(--line);border-radius:var(--radius-sm);font-size:13px">
+      </label>
+      <label style="display:flex;align-items:center;gap:6px;font-size:13px;color:var(--text-dim)">
+        To:
+        <input type="date" id="reportEndDate" value="${reportFilter.endDate}" style="padding:6px 10px;border:1px solid var(--line);border-radius:var(--radius-sm);font-size:13px">
+      </label>
+      <button class="btn btn-small" id="btnApplyDateFilter">Apply</button>
+      ${(reportFilter.startDate || reportFilter.endDate) ? `<button class="btn btn-ghost btn-small" id="btnClearDateFilter">Clear</button>` : ''}
+    </div>
+  `;
+
   main.innerHTML = `
     <div class="view-header">
       <div><h1 class="view-title">Report</h1><div class="view-sub">Per-account view — Income, Expense, Transfer &amp; Balance</div></div>
@@ -483,19 +514,37 @@ function renderReport(){
         <div class="hint" style="margin-top:4px">Tap to choose which accounts count</div>
       </div>
     </div>
+    ${dateFilterHtml}
     <div class="table-wrap">
       <table>
         <thead><tr><th>Account</th><th class="num">Income</th><th class="num">Expense</th><th class="num">Transfer</th><th class="num">Balance</th></tr></thead>
         <tbody>
           ${groupRows}
-          ${ungroupedRows || (!allGroups.length ? `<tr class="empty-row"><td colspan="5">No Income, Expense, or Transfer transactions yet.</td></tr>` : '')}
+          ${ungroupedRows || (!allGroups.length ? `<tr class="empty-row"><td colspan="5">No Income, Expense, or Transfer transactions${(reportFilter.startDate||reportFilter.endDate)?' in this date range':''} yet.</td></tr>` : '')}
         </tbody>
       </table>
     </div>
   `;
 
+  // Bind events
   document.getElementById('btnNewGroup').addEventListener('click', () => openGroupForm(null));
   document.getElementById('walletCard').addEventListener('click', () => openWalletForm(stats));
+  
+  document.getElementById('btnApplyDateFilter').addEventListener('click', () => {
+    reportFilter.startDate = document.getElementById('reportStartDate').value;
+    reportFilter.endDate = document.getElementById('reportEndDate').value;
+    renderReport();
+  });
+  
+  const clearBtn = document.getElementById('btnClearDateFilter');
+  if (clearBtn) {
+    clearBtn.addEventListener('click', () => {
+      reportFilter.startDate = '';
+      reportFilter.endDate = '';
+      renderReport();
+    });
+  }
+  
   main.querySelectorAll('[data-group-toggle]').forEach(tr => {
     tr.addEventListener('click', (e) => {
       if (e.target.closest('[data-edit-group]')) return;
@@ -555,7 +604,9 @@ function openWalletForm(stats){
 
 function openGroupForm(groupId){
   const editing = allGroups.find(g => g.id === groupId) || null;
-  const accounts = Object.keys(accountStats()).sort((a,b)=>a.localeCompare(b));
+  // Use the same filtered stats that renderReport uses
+  const stats = accountStats(reportFilter.startDate, reportFilter.endDate);
+  const accounts = Object.keys(stats).sort((a,b)=>a.localeCompare(b));
   openModal(`
     <div class="modal-close-row">
       <h3 class="modal-title">${editing ? 'Edit Group' : 'New Group'}</h3>
