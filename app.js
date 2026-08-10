@@ -321,7 +321,29 @@ async function importExcel(e){
   await reload();
   e.target.value = '';
   toast(`Imported ${records.length} transactions`);
-  navigate(currentView);
+
+  // Check if the Loan Detail modal is currently open; if so, close and reopen it
+  const overlay = document.getElementById('modalOverlay');
+  const modalTitleEl = overlay.querySelector('.modal-title');
+  if (overlay.classList.contains('open') && modalTitleEl && currentView === 'loan') {
+    // We need to find the code currently being viewed
+    const codeSpan = overlay.querySelector('.view-sub span');
+    if (codeSpan) {
+      const currentCode = codeSpan.textContent.trim();
+      // Close the modal
+      closeModal();
+      // Re-open the loan detail with the same code using fresh data
+      setTimeout(() => {
+        openLoanDetail(currentCode);
+        // Also ensure the main Loan table is up to date
+        renderLoan();
+      }, 200);
+    } else {
+      navigate(currentView);
+    }
+  } else {
+    navigate(currentView);
+  }
 }
 function normalizeDate(v){
   if (v instanceof Date) return localISO(v);
@@ -1288,7 +1310,7 @@ function openLoanDetail(code){
       <button class="modal-x" id="mClose">✕</button>
     </div>
     <div class="view-sub" style="margin-bottom:10px">Code: <span style="font-family:var(--font-mono)">${escapeHtml(g.code)}</span></div>
-    <div class="loan-summary-grid">
+    <div class="loan-summary-grid" id="loanSummaryGrid">
       <div>Account<b>${escapeHtml(g.account)}</b></div>
       <div>Date Released<b>${fmtDate(g.date)}</b></div>
       <div>Principal<b>${fmtMoney(g.principal)}</b></div>
@@ -1298,8 +1320,8 @@ function openLoanDetail(code){
       <div>Total Payable<b>${fmtMoney(total)}</b></div>
       <div>Frequency<b>${escapeHtml(info.frequency)}</b></div>
       <div>Start Payment<b>${fmtDate(info.startPaymentDate || g.date)}</b></div>
-      <div>Paid to Date<b>${fmtMoney(paid)}</b></div>
-      <div>Balance<b>${fmtMoney(balance)}</b></div>
+      <div id="paidToDateDisplay">Paid to Date<b>${fmtMoney(paid)}</b></div>
+      <div id="balanceDisplay">Balance<b>${fmtMoney(balance)}</b></div>
     </div>
     ${info.userRemarks ? `<div class="hint" style="margin-bottom:10px">Remarks: ${escapeHtml(info.userRemarks)}</div>` : ''}
     <div style="max-height:340px;overflow-y:auto" id="scheduleList">
@@ -1315,6 +1337,7 @@ function openLoanDetail(code){
   document.getElementById('mClose2').addEventListener('click', closeModal);
   document.getElementById('btnEditLoan').addEventListener('click', () => { closeModal(); openLoanForm(g); });
 
+  // --- FIX: Update only the row, don't destroy the modal ---
   document.querySelectorAll('#scheduleList .paidbox').forEach(box => {
     box.addEventListener('change', async (e) => {
       const row = box.closest('.schedule-row');
@@ -1325,6 +1348,8 @@ function openLoanDetail(code){
         date = row.querySelector('.sdate-input').value;
         if (!date){ toast('Pick a date first'); box.checked = false; return; }
       }
+      
+      // 1. Save / Delete in DB
       if (box.checked){
         const addInput = row.querySelector('.sadd input');
         const addAmount = parseMoney(addInput.value);
@@ -1345,9 +1370,35 @@ function openLoanDetail(code){
         await dbDeleteIds(ids);
         toast('Payment reverted');
       }
+
+      // 2. Reload data in memory
       await reload();
-      closeModal();
-      openLoanDetail(code);
+      
+      // 3. Update only the visual state of this row (instead of recreating the whole modal)
+      const allPayments = allTx.filter(t => t.transactionType === 'Loan Payment' && t.code === code);
+      const paidLines = date ? allPayments.filter(p => p.date === date) : [];
+      const isPaid = paidLines.some(p => p.category === 'Payment');
+      const addAmt = paidLines.find(p => p.category === 'Additional Payment');
+      
+      // Update row styling and inputs
+      row.classList.toggle('paid', isPaid);
+      const chk = row.querySelector('.paidbox');
+      const addInput = row.querySelector('.sadd input');
+      chk.checked = isPaid;
+      
+      // Disable/enable flexible date and additional amount
+      const sdateInput = row.querySelector('.sdate-input');
+      if (sdateInput) sdateInput.disabled = isPaid;
+      addInput.disabled = isPaid;
+      addInput.value = addAmt ? fmtMoney(addAmt.amount) : '';
+      
+      // 4. Update the summary numbers in the modal
+      const newPaid = loanPaid(code);
+      const newBalance = total - newPaid;
+      document.getElementById('paidToDateDisplay').innerHTML = `Paid to Date<b>${fmtMoney(newPaid)}</b>`;
+      document.getElementById('balanceDisplay').innerHTML = `Balance<b>${fmtMoney(newBalance)}</b>`;
+      
+      // 5. Update the background table (behind the modal)
       renderLoan();
     });
   });
