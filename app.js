@@ -39,7 +39,7 @@ function openDB(){
   });
 }
 
-function idbAddMany(records){
+function dbAddMany(records){
   return new Promise((resolve, reject) => {
     const tx = db.transaction(STORE, 'readwrite');
     const store = tx.objectStore(STORE);
@@ -49,7 +49,7 @@ function idbAddMany(records){
   });
 }
 
-function idbPut(record){
+function dbPut(record){
   return new Promise((resolve, reject) => {
     const tx = db.transaction(STORE, 'readwrite');
     tx.objectStore(STORE).put(record);
@@ -58,7 +58,7 @@ function idbPut(record){
   });
 }
 
-function idbGetAll(){
+function dbGetAll(){
   return new Promise((resolve, reject) => {
     const tx = db.transaction(STORE, 'readonly');
     const req = tx.objectStore(STORE).getAll();
@@ -67,7 +67,7 @@ function idbGetAll(){
   });
 }
 
-function idbDeleteIds(ids){
+function dbDeleteIds(ids){
   return new Promise((resolve, reject) => {
     const tx = db.transaction(STORE, 'readwrite');
     const store = tx.objectStore(STORE);
@@ -77,7 +77,7 @@ function idbDeleteIds(ids){
   });
 }
 
-function idbClearAll(){
+function dbClearAll(){
   return new Promise((resolve, reject) => {
     const tx = db.transaction(STORE, 'readwrite');
     tx.objectStore(STORE).clear();
@@ -87,7 +87,7 @@ function idbClearAll(){
 }
 
 /* ---- account groups (Report view only — survives Excel import/export) ---- */
-function idbGetAllGroups(){
+function dbGetAllGroups(){
   return new Promise((resolve, reject) => {
     const tx = db.transaction(GROUP_STORE, 'readonly');
     const req = tx.objectStore(GROUP_STORE).getAll();
@@ -95,7 +95,7 @@ function idbGetAllGroups(){
     req.onerror = (e) => reject(e.target.error);
   });
 }
-function idbSaveGroup(group){ // add (no id) or update (has id)
+function dbSaveGroup(group){ // add (no id) or update (has id)
   return new Promise((resolve, reject) => {
     const tx = db.transaction(GROUP_STORE, 'readwrite');
     const store = tx.objectStore(GROUP_STORE);
@@ -104,7 +104,7 @@ function idbSaveGroup(group){ // add (no id) or update (has id)
     tx.onerror = (e) => reject(e.target.error);
   });
 }
-function idbDeleteGroup(id){
+function dbDeleteGroup(id){
   return new Promise((resolve, reject) => {
     const tx = db.transaction(GROUP_STORE, 'readwrite');
     tx.objectStore(GROUP_STORE).delete(id);
@@ -114,7 +114,7 @@ function idbDeleteGroup(id){
 }
 
 /* ---- settings (key/value) ---- */
-function idbGetSetting(key){
+function dbGetSetting(key){
   return new Promise((resolve, reject) => {
     const tx = db.transaction(SETTINGS_STORE, 'readonly');
     const req = tx.objectStore(SETTINGS_STORE).get(key);
@@ -122,7 +122,7 @@ function idbGetSetting(key){
     req.onerror = (e) => reject(e.target.error);
   });
 }
-function idbSetSetting(key, value){
+function dbSetSetting(key, value){
   return new Promise((resolve, reject) => {
     const tx = db.transaction(SETTINGS_STORE, 'readwrite');
     tx.objectStore(SETTINGS_STORE).put({ key, value });
@@ -131,411 +131,21 @@ function idbSetSetting(key, value){
   });
 }
 
-/* ==========================================================================
-   FILE-FOLDER STORAGE — store all data as one JSON file inside a folder you
-   pick on your PC or phone (File System Access API), instead of the browser's
-   own local storage. Falls back to the in-browser IndexedDB above in
-   browsers that don't support the API (Firefox, iOS Safari).
-   ========================================================================== */
-const FS_SUPPORTED = typeof window.showDirectoryPicker === 'function';
-const DATA_FILE_NAME = 'moneytracker-data.json';
-const HANDLE_DB_NAME = 'MoneyTrackerHandleDB';
-const HANDLE_DB_VERSION = 1;
-const HANDLE_STORE = 'handles';
-
-let dirHandle = null;         // FileSystemDirectoryHandle currently linked, or null
-let storageMode = 'browser';  // 'folder' | 'browser' | 'needs-permission'
-
-function openHandleDB(){
-  return new Promise((resolve, reject) => {
-    const req = indexedDB.open(HANDLE_DB_NAME, HANDLE_DB_VERSION);
-    req.onupgradeneeded = (e) => {
-      if (!e.target.result.objectStoreNames.contains(HANDLE_STORE)) e.target.result.createObjectStore(HANDLE_STORE);
-    };
-    req.onsuccess = (e) => resolve(e.target.result);
-    req.onerror = (e) => reject(e.target.error);
-  });
-}
-async function saveDirHandle(handle){
-  const hdb = await openHandleDB();
-  return new Promise((resolve, reject) => {
-    const tx = hdb.transaction(HANDLE_STORE, 'readwrite');
-    tx.objectStore(HANDLE_STORE).put(handle, 'dir');
-    tx.oncomplete = () => resolve();
-    tx.onerror = (e) => reject(e.target.error);
-  });
-}
-async function loadDirHandle(){
-  const hdb = await openHandleDB();
-  return new Promise((resolve, reject) => {
-    const tx = hdb.transaction(HANDLE_STORE, 'readonly');
-    const req = tx.objectStore(HANDLE_STORE).get('dir');
-    req.onsuccess = () => resolve(req.result || null);
-    req.onerror = (e) => reject(e.target.error);
-  });
-}
-async function clearDirHandle(){
-  const hdb = await openHandleDB();
-  return new Promise((resolve, reject) => {
-    const tx = hdb.transaction(HANDLE_STORE, 'readwrite');
-    tx.objectStore(HANDLE_STORE).delete('dir');
-    tx.oncomplete = () => resolve();
-    tx.onerror = (e) => reject(e.target.error);
-  });
-}
-async function verifyPermissionSilent(handle){
-  try{ return (await handle.queryPermission({ mode:'readwrite' })) === 'granted'; }
-  catch{ return false; }
-}
-async function verifyPermission(handle){
-  try{
-    if ((await handle.queryPermission({ mode:'readwrite' })) === 'granted') return true;
-    return (await handle.requestPermission({ mode:'readwrite' })) === 'granted';
-  }catch{ return false; }
-}
-async function folderStillReachable(handle){
-  try{ await handle.keys().next(); return true; }
-  catch{ return false; }
-}
-async function readDataFile(){
-  try{
-    const fileHandle = await dirHandle.getFileHandle(DATA_FILE_NAME, { create:false });
-    const file = await fileHandle.getFile();
-    const text = await file.text();
-    return text ? JSON.parse(text) : null;
-  }catch(err){
-    if (err.name === 'NotFoundError') return null; // folder exists but no data file yet — empty
-    throw err;
-  }
-}
-async function writeDataFile(data){
-  const fileHandle = await dirHandle.getFileHandle(DATA_FILE_NAME, { create:true });
-  const writable = await fileHandle.createWritable();
-  await writable.write(JSON.stringify(data, null, 2));
-  await writable.close();
-}
-async function persist(){
-  if (storageMode !== 'folder' || !dirHandle) return;
-  await writeDataFile({ transactions: allTx, groups: allGroups, walletAccounts, loanOrder });
-}
-async function loadFromFolder(){
-  const reachable = await folderStillReachable(dirHandle);
-  if (!reachable){ const e = new Error('folder-missing'); e.code='folder-missing'; throw e; }
-  const data = await readDataFile();
-  if (data){
-    allTx = data.transactions || [];
-    allGroups = data.groups || [];
-    walletAccounts = data.walletAccounts ?? null;
-    loanOrder = data.loanOrder || [];
-  } else {
-    // Not linked to an existing data file in this folder yet — starts empty.
-    allTx = [];
-    allGroups = [];
-    walletAccounts = null;
-    loanOrder = [];
-    await persist(); // create the file now so the folder is visibly linked
-  }
-}
-async function chooseStorageFolder(){
-  if (!FS_SUPPORTED){
-    toast("This browser can't link a folder — try Chrome or Edge");
-    return false;
-  }
-  try{
-    const handle = await window.showDirectoryPicker();
-    const ok = await verifyPermission(handle);
-    if (!ok){ toast('Permission denied'); return false; }
-    dirHandle = handle;
-    await saveDirHandle(handle);
-    storageMode = 'folder';
-    await loadFromFolder();
-    toast(`Storage linked to "${handle.name}"`);
-    return true;
-  }catch(err){
-    if (err.name !== 'AbortError') toast('Could not open that folder');
-    return false;
-  }
-}
-async function reconnectStorage(){
-  if (!dirHandle) return false;
-  const ok = await verifyPermission(dirHandle);
-  if (!ok){ toast('Permission denied'); return false; }
-  try{
-    storageMode = 'folder';
-    await loadFromFolder();
-    hideStorageBanner();
-    updateStorageStatusUI();
-    navigate(currentView);
-    toast('Storage reconnected');
-    return true;
-  }catch(err){
-    storageMode = 'browser';
-    allTx = await idbGetAll();
-    allGroups = await idbGetAllGroups();
-    showStorageBanner('missing');
-    updateStorageStatusUI();
-    toast('That folder is no longer accessible');
-    return false;
-  }
-}
-async function switchToBrowserStorage(){
-  await clearDirHandle();
-  dirHandle = null;
-  storageMode = 'browser';
-  allTx = await idbGetAll();
-  allGroups = await idbGetAllGroups();
-  const savedWallet = await idbGetSetting('walletAccounts');
-  walletAccounts = Array.isArray(savedWallet) ? savedWallet : null;
-  const savedLoanOrder = await idbGetSetting('loanOrder');
-  loanOrder = Array.isArray(savedLoanOrder) ? savedLoanOrder : [];
-  updateStorageStatusUI();
-}
-
-/* ---- Dispatcher functions: same names the rest of the app already calls,
-        but they route to the linked folder file or to IndexedDB depending
-        on storageMode. ---- */
-async function dbAddMany(records){
-  if (storageMode === 'folder'){
-    let nextId = allTx.reduce((m,t) => Math.max(m, t.id||0), 0) + 1;
-    records.forEach(r => { r.id = nextId++; allTx.push(r); });
-    await persist();
-    return;
-  }
-  return idbAddMany(records);
-}
-async function dbPut(record){
-  if (storageMode === 'folder'){
-    const idx = allTx.findIndex(t => t.id === record.id);
-    if (idx >= 0) allTx[idx] = record; else allTx.push(record);
-    await persist();
-    return;
-  }
-  return idbPut(record);
-}
-async function dbGetAll(){
-  if (storageMode === 'folder') return allTx;
-  return idbGetAll();
-}
-async function dbDeleteIds(ids){
-  if (storageMode === 'folder'){
-    const idSet = new Set(ids);
-    allTx = allTx.filter(t => !idSet.has(t.id));
-    await persist();
-    return;
-  }
-  return idbDeleteIds(ids);
-}
-async function dbClearAll(){
-  if (storageMode === 'folder'){
-    allTx = [];
-    await persist();
-    return;
-  }
-  return idbClearAll();
-}
-async function dbGetAllGroups(){
-  if (storageMode === 'folder') return allGroups;
-  return idbGetAllGroups();
-}
-async function dbSaveGroup(group){
-  if (storageMode === 'folder'){
-    if (group.id){
-      const idx = allGroups.findIndex(g => g.id === group.id);
-      if (idx >= 0) allGroups[idx] = group;
-    } else {
-      group.id = allGroups.reduce((m,g) => Math.max(m, g.id||0), 0) + 1;
-      allGroups.push(group);
-    }
-    await persist();
-    return group.id;
-  }
-  return idbSaveGroup(group);
-}
-async function dbDeleteGroup(id){
-  if (storageMode === 'folder'){
-    allGroups = allGroups.filter(g => g.id !== id);
-    await persist();
-    return;
-  }
-  return idbDeleteGroup(id);
-}
-async function dbGetSetting(key){
-  if (storageMode === 'folder'){
-    if (key === 'walletAccounts') return walletAccounts;
-    if (key === 'loanOrder') return loanOrder;
-    return undefined;
-  }
-  return idbGetSetting(key);
-}
-async function dbSetSetting(key, value){
-  if (storageMode === 'folder'){
-    if (key === 'walletAccounts') walletAccounts = value;
-    if (key === 'loanOrder') loanOrder = value;
-    await persist();
-    return;
-  }
-  return idbSetSetting(key, value);
-}
-
-/* ---- Storage banner + Storage modal UI ---- */
-function showStorageBanner(kind){
-  const b = document.getElementById('storageBanner');
-  if (!b) return;
-  if (kind === 'reconnect'){
-    b.innerHTML = `<span>⚠ Storage folder needs to be reconnected — your data is not loaded until then.</span> <button class="btn btn-small" id="bannerReconnect">Reconnect Storage</button>`;
-  } else if (kind === 'missing'){
-    b.innerHTML = `<span>⚠ The linked storage folder is missing or was moved.</span> <button class="btn btn-small" id="bannerChoose">Choose Storage</button>`;
-  } else { // 'choose'
-    b.innerHTML = `<span>📁 Data is only saved in this browser right now.</span> <button class="btn btn-small" id="bannerChoose">Choose a PC/Phone Folder</button> <button class="btn btn-ghost btn-small" id="bannerDismiss">Dismiss</button>`;
-  }
-  b.style.display = 'flex';
-  const reconnect = document.getElementById('bannerReconnect');
-  if (reconnect) reconnect.addEventListener('click', reconnectStorage);
-  const choose = document.getElementById('bannerChoose');
-  if (choose) choose.addEventListener('click', async () => {
-    const ok = await chooseStorageFolder();
-    if (ok){ hideStorageBanner(); updateStorageStatusUI(); navigate(currentView); }
-  });
-  const dismiss = document.getElementById('bannerDismiss');
-  if (dismiss) dismiss.addEventListener('click', hideStorageBanner);
-}
-function hideStorageBanner(){
-  const b = document.getElementById('storageBanner');
-  if (b) b.style.display = 'none';
-}
-function updateStorageStatusUI(){
-  const label = storageMode === 'folder' ? 'Storage: Folder'
-    : storageMode === 'needs-permission' ? 'Storage: Reconnect'
-    : 'Storage: Browser';
-  document.querySelectorAll('#storageLabel, #storageLabelMobile').forEach(el => el.textContent = label);
-}
-function openStorageModal(){
-  let statusHtml;
-  if (storageMode === 'folder'){
-    statusHtml = `Linked to a folder${dirHandle && dirHandle.name ? `: <b>${escapeHtml(dirHandle.name)}</b>` : ''} on this device. All data is saved as <span style="font-family:var(--font-mono)">${DATA_FILE_NAME}</span> inside it — no browser storage is used.`;
-  } else if (storageMode === 'needs-permission'){
-    statusHtml = `A folder was linked before, but this browser needs permission re-confirmed before it can read or write it.`;
-  } else {
-    statusHtml = FS_SUPPORTED
-      ? `Currently saving inside this browser only. Link a folder on your PC or phone to keep a real file backup that survives clearing browser data, and that you can move between devices. If the folder has no <span style="font-family:var(--font-mono)">${DATA_FILE_NAME}</span> yet, the app starts empty there — export/import Excel to move your current browser data over.`
-      : `Currently saving inside this browser only. This browser doesn't support linking a folder — try Chrome or Edge (on desktop or Android) to enable it.`;
-  }
-  openModal(`
-    <div class="modal-close-row">
-      <h3 class="modal-title">Storage</h3>
-      <button class="modal-x" id="mClose">✕</button>
-    </div>
-    <div class="hint" style="margin-bottom:16px;line-height:1.6;font-size:13px">${statusHtml}</div>
-    <div class="modal-actions" style="justify-content:flex-start;flex-wrap:wrap">
-      ${FS_SUPPORTED ? `<button class="btn btn-primary" id="btnPickFolder">${storageMode==='folder'?'Change Folder':'Choose Folder'}</button>` : ''}
-      ${storageMode === 'needs-permission' ? `<button class="btn" id="btnReconnect2">Reconnect</button>` : ''}
-      ${storageMode === 'folder' ? `<button class="btn btn-ghost" id="btnUnlink">Use Browser Storage Instead</button>` : ''}
-    </div>
-  `);
-  document.getElementById('mClose').addEventListener('click', closeModal);
-  const pick = document.getElementById('btnPickFolder');
-  if (pick) pick.addEventListener('click', async () => {
-    const ok = await chooseStorageFolder();
-    if (ok){ closeModal(); hideStorageBanner(); updateStorageStatusUI(); navigate(currentView); }
-  });
-  const rec = document.getElementById('btnReconnect2');
-  if (rec) rec.addEventListener('click', async () => { const ok = await reconnectStorage(); if (ok) closeModal(); });
-  const unlink = document.getElementById('btnUnlink');
-  if (unlink) unlink.addEventListener('click', async () => {
-    if (!confirm('Switch back to in-browser storage? The folder and its file are left untouched, but this app will stop reading or writing it until you link it again.')) return;
-    await switchToBrowserStorage();
-    closeModal();
-    navigate(currentView);
-    toast('Switched to browser storage');
-  });
-}
-
 /* ------------------------------ App state -------------------------------- */
 let allTx = [];             // in-memory mirror of the tx store
 let allGroups = [];         // in-memory mirror of the groups store
 let walletAccounts = null;  // null = "all accounts"; else array of included account names
-let loanOrder = [];         // persistent ordering of loan codes
 let currentView = 'report';
 
 async function init(){
+  await openDB();
+  allTx = await dbGetAll();
+  allGroups = await dbGetAllGroups();
+  const savedWallet = await dbGetSetting('walletAccounts');
+  walletAccounts = Array.isArray(savedWallet) ? savedWallet : null;
   bindNav();
   bindGlobalUI();
-  await initStorage();
   navigate('report');
-}
-
-async function initStorage(){
-  await openDB(); // IndexedDB is still opened — it's the fallback store, and the target when switching back to browser storage
-  if (FS_SUPPORTED){
-    try{
-      const handle = await loadDirHandle();
-      if (handle){
-        dirHandle = handle;
-        if (await verifyPermissionSilent(handle)){
-          try{
-            storageMode = 'folder';
-            await loadFromFolder();
-            updateStorageStatusUI();
-            // ensure loanOrder is populated (may be present in file)
-            loanOrder = loanOrder || [];
-            return;
-          }catch(err){
-            // Handle remembered, permission granted, but the folder itself is gone/moved
-            storageMode = 'browser';
-            allTx = await idbGetAll();
-            allGroups = await idbGetAllGroups();
-            const savedWallet = await idbGetSetting('walletAccounts');
-            walletAccounts = Array.isArray(savedWallet) ? savedWallet : null;
-            const savedLoanOrder = await idbGetSetting('loanOrder');
-            loanOrder = Array.isArray(savedLoanOrder) ? savedLoanOrder : [];
-            updateStorageStatusUI();
-            showStorageBanner('missing');
-            return;
-          }
-        } else {
-          // Try to request permission now (may require user gesture) — if browser blocks, fall back to banner
-          try {
-            const ok = await verifyPermission(handle);
-            if (ok){
-              dirHandle = handle;
-              storageMode = 'folder';
-              await loadFromFolder();
-              updateStorageStatusUI();
-              loanOrder = loanOrder || [];
-              return;
-            } else {
-              storageMode = 'needs-permission';
-              allTx = [];
-              allGroups = [];
-              walletAccounts = null;
-              loanOrder = [];
-              updateStorageStatusUI();
-              showStorageBanner('reconnect');
-              return;
-            }
-          } catch (err) {
-            storageMode = 'needs-permission';
-            allTx = [];
-            allGroups = [];
-            walletAccounts = null;
-            loanOrder = [];
-            updateStorageStatusUI();
-            showStorageBanner('reconnect');
-            return;
-          }
-        }
-      }
-    }catch(err){ /* fall through to browser storage below */ }
-  }
-  storageMode = 'browser';
-  allTx = await idbGetAll();
-  allGroups = await idbGetAllGroups();
-  const savedWallet = await idbGetSetting('walletAccounts');
-  walletAccounts = Array.isArray(savedWallet) ? savedWallet : null;
-  const savedLoanOrder = await idbGetSetting('loanOrder');
-  loanOrder = Array.isArray(savedLoanOrder) ? savedLoanOrder : [];
-  updateStorageStatusUI();
-  if (FS_SUPPORTED) showStorageBanner('choose');
 }
 
 async function reload(){
@@ -662,16 +272,13 @@ function bindGlobalUI(){
   document.getElementById('btnExport').addEventListener('click', exportExcel);
   document.getElementById('fileImport').addEventListener('change', importExcel);
   document.getElementById('btnClear').addEventListener('click', openClearTransactionsForm);
-  document.getElementById('btnStorage').addEventListener('click', openStorageModal);
 
   const mExport = document.getElementById('btnExportMobile');
   const mImport = document.getElementById('fileImportMobile');
   const mClear = document.getElementById('btnClearMobile');
-  const mStorage = document.getElementById('btnStorageMobile');
   if (mExport) mExport.addEventListener('click', exportExcel);
   if (mImport) mImport.addEventListener('change', importExcel);
   if (mClear) mClear.addEventListener('click', openClearTransactionsForm);
-  if (mStorage) mStorage.addEventListener('click', openStorageModal);
 }
 
 function exportExcel(){
@@ -853,22 +460,22 @@ function sumStats(list){
 }
 function statsRowHtml(name, s, indent=false){
   return `
-    <tr data-account="${escapeHtml(name)}">
-      <td data-label="Account"${indent ? ' style="padding-left:30px;color:var(--text-dim)"' : ''}>${escapeHtml(name)}</td>
-      <td class="num" data-label="Income">${fmtMoney(s.income)}</td>
-      <td class="num" data-label="Expense">${fmtMoney(s.expense)}</td>
-      <td class="num" data-label="Transfer">${fmtMoney(s.transferIn - s.transferOut)}</td>
-      <td class="num" data-label="Balance"><b>${fmtMoney(s.balance)}</b></td>
+    <tr class="no-hover">
+      <td${indent ? ' style="padding-left:30px;color:var(--text-dim)"' : ''}>${escapeHtml(name)}</td>
+      <td class="num">${fmtMoney(s.income)}</td>
+      <td class="num">${fmtMoney(s.expense)}</td>
+      <td class="num">${fmtMoney(s.transferIn - s.transferOut)}</td>
+      <td class="num"><b>${fmtMoney(s.balance)}</b></td>
     </tr>`;
 }
 function groupTotalRowHtml(g, total, isOpen){
   return `
     <tr class="no-hover" data-group-toggle="${g.id}" style="cursor:pointer;background:#F8F7F1">
-      <td data-label="Group"><span style="display:inline-block;width:12px">${isOpen?'▾':'▸'}</span><b>${escapeHtml(g.name)}</b> <span class="hint" style="display:inline">(${g.accounts.length})</span> <button class="icon-btn" data-edit-group="${g.id}" title="Edit group" style="font-size:12px">✎</button></td>
-      <td class="num" data-label="Income">—</td>
-      <td class="num" data-label="Expense">—</td>
-      <td class="num" data-label="Transfer">—</td>
-      <td class="num" data-label="Balance"><b>${fmtMoney(total.balance)}</b></td>
+      <td><span style="display:inline-block;width:12px">${isOpen?'▾':'▸'}</span><b>${escapeHtml(g.name)}</b> <span class="hint" style="display:inline">(${g.accounts.length})</span> <button class="icon-btn" data-edit-group="${g.id}" title="Edit group" style="font-size:12px">✎</button></td>
+      <td class="num">—</td>
+      <td class="num">—</td>
+      <td class="num">—</td>
+      <td class="num"><b>${fmtMoney(total.balance)}</b></td>
     </tr>`;
 }
 function walletBalance(stats){
@@ -880,12 +487,7 @@ let expandedGroups = new Set();
 
 function renderReport(){
   const main = document.getElementById('main');
-
-  // Ensure report date defaults: start = earliest transaction recorded overall, end = today
-  const earliestAll = allTx.reduce((m,t) => (t && t.date && (!m || t.date < m) ? t.date : m), null) || todayStr();
-  if (!reportFilter.startDate) reportFilter.startDate = earliestAll;
-  if (!reportFilter.endDate) reportFilter.endDate = todayStr();
-
+  
   // Get stats with date filter applied
   const stats = accountStats(reportFilter.startDate, reportFilter.endDate);
   const allAccountNames = Object.keys(stats);
@@ -936,7 +538,7 @@ function renderReport(){
     </div>
     ${dateFilterHtml}
     <div class="table-wrap">
-      <table class="report-table">
+      <table>
         <thead><tr><th>Account</th><th class="num">Income</th><th class="num">Expense</th><th class="num">Transfer</th><th class="num">Balance</th></tr></thead>
         <tbody>
           ${groupRows}
@@ -949,11 +551,6 @@ function renderReport(){
   // Bind events
   document.getElementById('btnNewGroup').addEventListener('click', () => openGroupForm(null));
   document.getElementById('walletCard').addEventListener('click', () => openWalletForm(stats));
-
-  // Click an account row -> pop up that account's Income/Expense/Transfer transactions
-  main.querySelectorAll('tbody tr[data-account]').forEach(tr => {
-    tr.addEventListener('click', () => openAccountTransactionsModal(tr.dataset.account, stats));
-  });
   
   document.getElementById('btnApplyDateFilter').addEventListener('click', () => {
     reportFilter.startDate = document.getElementById('reportStartDate').value;
@@ -1027,131 +624,60 @@ function openWalletForm(stats){
   });
 }
 
-/* Popup shown when an account row on the Report screen is clicked — every
-   Income / Expense / Transfer line touching that account, newest first.
-   Respects the Report screen's current From/To date filter. */
-function openAccountTransactionsModal(name, stats){
-  const s = stats[name] || { income:0, expense:0, transferIn:0, transferOut:0, balance:0 };
-
-  // build the full set of rows for that account (unfiltered), so we can compute earliest
-  const allAccountRows = ledgerTx().filter(t => {
-    if (t.transactionType === 'Income') return t.toAccount === name;
-    if (t.transactionType === 'Expense') return t.fromAccount === name;
-    if (t.transactionType === 'Transfer') return t.fromAccount === name || t.toAccount === name;
-    return false;
-  });
-
-  const firstDate = allAccountRows.reduce((m,t) => (t.date && (!m || t.date < m) ? t.date : m), null) || todayStr();
-  const popupStart = firstDate;
-  const popupEnd = todayStr();
-
-  // function to get the rows filtered by provided start/end
-  function filteredRows(startDate, endDate){
-    return ledgerTx().filter(t => {
-      if (startDate && t.date && t.date < startDate) return false;
-      if (endDate && t.date && t.date > endDate) return false;
-      if (t.transactionType === 'Income') return t.toAccount === name;
-      if (t.transactionType === 'Expense') return t.fromAccount === name;
-      if (t.transactionType === 'Transfer') return t.fromAccount === name || t.toAccount === name;
-      return false;
-    }).sort((a,b) => (b.date||'').localeCompare(a.date||''));
-  }
-
-  // initial rows
-  let rows = filteredRows(popupStart, popupEnd);
-
-  const rowsHtml = rows.map(t => {
-    const cls = t.transactionType.toLowerCase();
-    let detail, sign;
-    if (t.transactionType === 'Income'){ detail = t.category || 'Income'; sign = '+'; }
-    else if (t.transactionType === 'Expense'){ detail = t.category || 'Expense'; sign = '-'; }
-    else if (t.toAccount === name){ detail = `From ${t.fromAccount || '—'}`; sign = '+'; }
-    else { detail = `To ${t.toAccount || '—'}`; sign = '-'; }
-    return `
-      <div class="acct-tx-row">
-        <span class="tag ${cls}">${t.transactionType}</span>
-        <span data-label="Date">${fmtDate(t.date)}</span>
-        <span data-label="Detail">${escapeHtml(detail)}</span>
-        <span class="atx-remarks" data-label="Remarks">${escapeHtml(t.remarks||'—')}</span>
-        <span class="atx-amt num ${sign==='+'?'amt-pos':'amt-neg'}" data-label="Amount">${sign}${fmtMoney(t.amount)}</span>
-      </div>`;
-  }).join('');
-
+function openGroupForm(groupId){
+  const editing = allGroups.find(g => g.id === groupId) || null;
+  // Use the same filtered stats that renderReport uses
+  const stats = accountStats(reportFilter.startDate, reportFilter.endDate);
+  const accounts = Object.keys(stats).sort((a,b)=>a.localeCompare(b));
   openModal(`
     <div class="modal-close-row">
-      <h3 class="modal-title">${escapeHtml(name)}</h3>
+      <h3 class="modal-title">${editing ? 'Edit Group' : 'New Group'}</h3>
       <button class="modal-x" id="mClose">✕</button>
     </div>
-    <div style="margin-bottom:10px" class="filter-row">
-      <label style="display:flex;align-items:center;gap:6px;font-size:13px;color:var(--text-dim)">
-        From: <input type="date" id="acctStartDate" value="${popupStart}" style="padding:6px 10px;border:1px solid var(--line);border-radius:var(--radius-sm);font-size:13px">
-      </label>
-      <label style="display:flex;align-items:center;gap:6px;font-size:13px;color:var(--text-dim)">
-        To: <input type="date" id="acctEndDate" value="${popupEnd}" style="padding:6px 10px;border:1px solid var(--line);border-radius:var(--radius-sm);font-size:13px">
-      </label>
-      <button class="btn btn-small" id="btnApplyAcctDate">Apply</button>
-      <button class="btn btn-ghost btn-small" id="btnClearAcctDate">Clear</button>
-    </div>
-
-    <div class="loan-summary-grid" style="background:var(--line-soft)">
-      <div>Income<b style="color:var(--income)">${fmtMoney(s.income)}</b></div>
-      <div>Expense<b style="color:var(--expense)">${fmtMoney(s.expense)}</b></div>
-      <div>Transfer<b>${fmtMoney(s.transferIn - s.transferOut)}</b></div>
-      <div>Balance<b>${fmtMoney(s.balance)}</b></div>
-    </div>
-    <div class="acct-tx-list" id="acctTxList">
-      ${rowsHtml || `<div class="hint" style="padding:26px 0;text-align:center">No transactions for this account.</div>`}
-    </div>
-    <div class="modal-actions"><button type="button" class="btn" id="mClose2">Close</button></div>
-  `, true);
-
+    <form id="groupForm">
+      <div class="field"><label>Group Name</label>
+        <input type="text" name="name" value="${editing ? escapeHtml(editing.name) : ''}" required>
+      </div>
+      <div class="field">
+        <label>Accounts in this group</label>
+        <div style="max-height:220px;overflow-y:auto;border:1px solid var(--line);border-radius:8px;padding:8px 12px">
+          ${accounts.length ? accounts.map(a => `
+            <label style="display:flex;align-items:center;gap:8px;padding:5px 0;font-size:13.5px">
+              <input type="checkbox" value="${escapeHtml(a)}" ${editing && editing.accounts.includes(a) ? 'checked' : ''}>
+              ${escapeHtml(a)}
+            </label>
+          `).join('') : '<div class="hint">No accounts yet — add an Income, Expense, or Transfer first.</div>'}
+        </div>
+      </div>
+      <div class="modal-actions">
+        ${editing ? '<button type="button" class="btn btn-danger" id="btnDeleteGroup" style="margin-right:auto">Delete Group</button>' : ''}
+        <button type="button" class="btn" id="mCancel">Cancel</button>
+        <button type="submit" class="btn btn-primary">Save Group</button>
+      </div>
+    </form>
+  `);
+  const form = document.getElementById('groupForm');
   document.getElementById('mClose').addEventListener('click', closeModal);
-  document.getElementById('mClose2').addEventListener('click', closeModal);
-
-  document.getElementById('btnApplyAcctDate').addEventListener('click', () => {
-    const s = document.getElementById('acctStartDate').value;
-    const e = document.getElementById('acctEndDate').value;
-    const newRows = filteredRows(s, e);
-    const html = newRows.map(t => {
-      const cls = t.transactionType.toLowerCase();
-      let detail, sign;
-      if (t.transactionType === 'Income'){ detail = t.category || 'Income'; sign = '+'; }
-      else if (t.transactionType === 'Expense'){ detail = t.category || 'Expense'; sign = '-'; }
-      else if (t.toAccount === name){ detail = `From ${t.fromAccount || '—'}`; sign = '+'; }
-      else { detail = `To ${t.toAccount || '—'}`; sign = '-'; }
-      return `
-        <div class="acct-tx-row">
-          <span class="tag ${cls}">${t.transactionType}</span>
-          <span data-label="Date">${fmtDate(t.date)}</span>
-          <span data-label="Detail">${escapeHtml(detail)}</span>
-          <span class="atx-remarks" data-label="Remarks">${escapeHtml(t.remarks||'—')}</span>
-          <span class="atx-amt num ${sign==='+'?'amt-pos':'amt-neg'}" data-label="Amount">${sign}${fmtMoney(t.amount)}</span>
-        </div>`;
-    }).join('') || `<div class="hint" style="padding:26px 0;text-align:center">No transactions for this account in that range.</div>`;
-    document.getElementById('acctTxList').innerHTML = html;
+  document.getElementById('mCancel').addEventListener('click', closeModal);
+  const delBtn = document.getElementById('btnDeleteGroup');
+  if (delBtn) delBtn.addEventListener('click', async () => {
+    if (!confirm(`Delete group "${editing.name}"? Accounts themselves are not affected.`)) return;
+    await dbDeleteGroup(editing.id);
+    await reloadGroups();
+    closeModal();
+    toast('Group deleted');
+    renderReport();
   });
-
-  document.getElementById('btnClearAcctDate').addEventListener('click', () => {
-    document.getElementById('acctStartDate').value = popupStart;
-    document.getElementById('acctEndDate').value = popupEnd;
-    const newRows = filteredRows(popupStart, popupEnd);
-    const html = newRows.map(t => {
-      const cls = t.transactionType.toLowerCase();
-      let detail, sign;
-      if (t.transactionType === 'Income'){ detail = t.category || 'Income'; sign = '+'; }
-      else if (t.transactionType === 'Expense'){ detail = t.category || 'Expense'; sign = '-'; }
-      else if (t.toAccount === name){ detail = `From ${t.fromAccount || '—'}`; sign = '+'; }
-      else { detail = `To ${t.toAccount || '—'}`; sign = '-'; }
-      return `
-        <div class="acct-tx-row">
-          <span class="tag ${cls}">${t.transactionType}</span>
-          <span data-label="Date">${fmtDate(t.date)}</span>
-          <span data-label="Detail">${escapeHtml(detail)}</span>
-          <span class="atx-remarks" data-label="Remarks">${escapeHtml(t.remarks||'—')}</span>
-          <span class="atx-amt num ${sign==='+'?'amt-pos':'amt-neg'}" data-label="Amount">${sign}${fmtMoney(t.amount)}</span>
-        </div>`;
-    }).join('') || `<div class="hint" style="padding:26px 0;text-align:center">No transactions for this account.</div>`;
-    document.getElementById('acctTxList').innerHTML = html;
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const selected = Array.from(form.querySelectorAll('input[type="checkbox"]:checked')).map(c => c.value);
+    const record = { name: form.name.value.trim(), accounts: selected };
+    if (editing) record.id = editing.id;
+    await dbSaveGroup(record);
+    await reloadGroups();
+    closeModal();
+    toast('Group saved');
+    renderReport();
   });
 }
 
@@ -1163,11 +689,9 @@ const LEDGER_CFG = {
   Expense:  { icon:'－', cls:'expense',  fields:['account','category','subCategory'] },
   Transfer: { icon:'⇄', cls:'transfer', fields:['fromAccount','toAccount'] }
 };
-// ledgerFilters now includes startDate/endDate defaults for each ledger type
 const ledgerFilters = {
-  Income:  { account:'', category:'', startDate:'', endDate:'' },
-  Expense: { account:'', category:'', startDate:'', endDate:'' },
-  Transfer:{ startDate:'', endDate:'' }
+  Income:  { account:'', category:'' },
+  Expense: { account:'', category:'' }
 };
 
 function renderLedger(type){
@@ -1175,41 +699,13 @@ function renderLedger(type){
   const isTransfer = type === 'Transfer';
   const allRows = allTx.filter(t => t.transactionType === type);
   const filter = ledgerFilters[type];
-
-  // set default date range: start = earliest transaction recorded overall, end = today
-  const earliestAll = allTx.reduce((m,t) => (t && t.date && (!m || t.date < m) ? t.date : m), null) || todayStr();
-  const defaultStart = earliestAll;
-  const defaultEnd = todayStr();
-  if (!filter.startDate) filter.startDate = defaultStart;
-  if (!filter.endDate) filter.endDate = defaultEnd;
-
-  // apply date filtering in addition to existing account/category filters
-  let rows = allRows.filter(t => {
-    if (filter.startDate && t.date && t.date < filter.startDate) return false;
-    if (filter.endDate && t.date && t.date > filter.endDate) return false;
-    return true;
-  });
-
+  let rows = allRows;
   if (!isTransfer && filter){
     if (filter.account) rows = rows.filter(t => (type==='Income'?t.toAccount:t.fromAccount) === filter.account);
     if (filter.category) rows = rows.filter(t => t.category === filter.category);
   }
   rows = rows.slice().sort((a,b) => (b.date||'').localeCompare(a.date||''));
   const main = document.getElementById('main');
-
-  // build date filter HTML
-  const dateFilterHtml = `
-    <div class="filter-row">
-      <label style="display:flex;align-items:center;gap:6px;font-size:13px;color:var(--text-dim)">
-        From: <input type="date" id="ledgerStartDate" value="${filter.startDate}" style="padding:6px 10px;border:1px solid var(--line);border-radius:var(--radius-sm);font-size:13px">
-      </label>
-      <label style="display:flex;align-items:center;gap:6px;font-size:13px;color:var(--text-dim)">
-        To: <input type="date" id="ledgerEndDate" value="${filter.endDate}" style="padding:6px 10px;border:1px solid var(--line);border-radius:var(--radius-sm);font-size:13px">
-      </label>
-      <button class="btn btn-small" id="btnApplyLedgerDateFilter">Apply</button>
-      ${(filter.startDate||filter.endDate) ? `<button class="btn btn-ghost btn-small" id="btnClearLedgerDateFilter">Clear</button>` : ''}
-    </div>
-  `;
 
   let filterHtml = '';
   if (!isTransfer){
@@ -1228,10 +724,6 @@ function renderLedger(type){
         ${(filter.account||filter.category) ? `<button type="button" class="btn btn-ghost btn-small" id="btnClearFilter">Clear filter</button>` : ''}
       </div>
     `;
-    filterHtml = dateFilterHtml + filterHtml;
-  } else {
-    // transfer: only date filters
-    filterHtml = dateFilterHtml;
   }
 
   main.innerHTML = `
@@ -1270,22 +762,6 @@ function renderLedger(type){
     const clearBtn = document.getElementById('btnClearFilter');
     if (clearBtn) clearBtn.addEventListener('click', () => { filter.account=''; filter.category=''; renderLedger(type); });
   }
-
-  // date filter bindings
-  document.getElementById('btnApplyLedgerDateFilter').addEventListener('click', () => {
-    const s = document.getElementById('ledgerStartDate').value;
-    const e = document.getElementById('ledgerEndDate').value;
-    filter.startDate = s;
-    filter.endDate = e;
-    renderLedger(type);
-  });
-  const cl = document.getElementById('btnClearLedgerDateFilter');
-  if (cl) cl.addEventListener('click', () => {
-    filter.startDate = '';
-    filter.endDate = '';
-    renderLedger(type);
-  });
-
   main.querySelectorAll('#ledgerBody tr[data-id]').forEach(tr => {
     tr.addEventListener('click', (e) => {
       if (e.target.closest('[data-del]')) return;
@@ -1373,17 +849,7 @@ function openLedgerForm(type, editing=null){
   } else {
     attachAutocomplete(form.account, document.getElementById('acAccount'), () => accountSuggestions);
     attachAutocomplete(form.category, document.getElementById('acCat'), () => catSuggestions);
-
-    // SubCategory: show suggestions that belong to the currently-selected Category for this transaction type
-    attachAutocomplete(form.subCategory, document.getElementById('acSub'), () => {
-      const cat = (form.category && form.category.value || '').trim();
-      if (!cat) {
-        // if no category selected, fall back to all subcategories for the type
-        return uniq(allTx.filter(t => t.transactionType === type).map(t => t.subCategory));
-      }
-      // show subcategories that have been used WITH that category for this type
-      return uniq(allTx.filter(t => t.transactionType === type && t.category === cat).map(t => t.subCategory));
-    });
+    attachAutocomplete(form.subCategory, document.getElementById('acSub'), () => subSuggestions);
   }
   document.getElementById('mClose').addEventListener('click', closeModal);
   document.getElementById('mCancel').addEventListener('click', closeModal);
@@ -1450,7 +916,7 @@ function loanGroups(){
       interest: Number(interest?.amount)||0,
       remarksRaw: net?.remarks || ''
     };
-  });
+  }).sort((a,b) => (b.date||'').localeCompare(a.date||''));
 }
 function loanPaid(code){
   return allTx.filter(t => t.transactionType === 'Loan Payment' && t.code === code)
@@ -1487,43 +953,12 @@ function repaymentDateLabel(info){
 
 const loanFilter = { debtor:'', account:'', balance:'all' };
 
-async function saveLoanOrder(order){
-  loanOrder = order.slice();
-  await dbSetSetting('loanOrder', loanOrder);
-  toast('Order saved');
-}
-
-function ensureLoanOrderIncludesAll(groups){
-  const codes = groups.map(g => g.code);
-  if (!loanOrder || !loanOrder.length) {
-    loanOrder = codes.slice();
-    return;
-  }
-  // add missing codes to end preserving existing order
-  codes.forEach(c => { if (!loanOrder.includes(c)) loanOrder.push(c); });
-}
-
-function sortGroupsByLoanOrder(groups){
-  if (!loanOrder || !loanOrder.length) return groups.slice().sort((a,b) => (b.date||'').localeCompare(a.date||''));
-  const map = new Map(groups.map(g => [g.code, g]));
-  const ordered = [];
-  loanOrder.forEach(code => { if (map.has(code)) ordered.push(map.get(code)); });
-  // append any groups not in loanOrder
-  groups.forEach(g => { if (!loanOrder.includes(g.code)) ordered.push(g); });
-  return ordered;
-}
-
 function renderLoan(){
-  const groupsRaw = loanGroups();
-  // Ensure loanOrder includes all existing loan codes
-  ensureLoanOrderIncludesAll(groupsRaw);
-  // Apply ordering
-  const groupsOrdered = sortGroupsByLoanOrder(groupsRaw);
+  const groups = loanGroups();
+  const debtorOpts = uniq(groups.map(g=>g.debtor)).sort((a,b)=>a.localeCompare(b));
+  const accountOpts = uniq(groups.map(g=>g.account)).sort((a,b)=>a.localeCompare(b));
 
-  const debtorOpts = uniq(groupsOrdered.map(g=>g.debtor)).sort((a,b)=>a.localeCompare(b));
-  const accountOpts = uniq(groupsOrdered.map(g=>g.account)).sort((a,b)=>a.localeCompare(b));
-
-  let filtered = groupsOrdered.slice();
+  let filtered = groups;
   if (loanFilter.debtor) filtered = filtered.filter(g => g.debtor === loanFilter.debtor);
   if (loanFilter.account) filtered = filtered.filter(g => g.account === loanFilter.account);
   if (loanFilter.balance !== 'all'){
@@ -1536,7 +971,7 @@ function renderLoan(){
   const main = document.getElementById('main');
   main.innerHTML = `
     <div class="view-header">
-      <div><h1 class="view-title">Loan</h1><div class="view-sub">${filtered.length} of ${groupsOrdered.length} loan${groupsOrdered.length===1?'':'s'}</div></div>
+      <div><h1 class="view-title">Loan</h1><div class="view-sub">${filtered.length} of ${groups.length} loan${groups.length===1?'':'s'}</div></div>
       <button class="btn btn-primary loan" id="btnAddLoan">+ Add Loan</button>
     </div>
     <div class="filter-row">
@@ -1557,18 +992,15 @@ function renderLoan(){
     <div class="table-wrap">
       <table>
         <thead><tr>
-          <th></th><th>#</th><th>Date Released</th><th>Debtor</th><th>Account</th>
+          <th>#</th><th>Date Released</th><th>Debtor</th><th>Account</th>
           <th class="num">Amount</th><th>Repayment Date</th><th class="num">Repayment Amount</th>
-          <th class="num">Total Payment Count</th><th class="num">Balance</th><th></th>
+          <th class="num">Balance</th><th></th>
         </tr></thead>
         <tbody id="loanBody">
           ${filtered.length ? filtered.map((g,i) => {
             const info = parseLoanRemarks(g.remarksRaw);
-            const paymentCount = allTx.filter(t => t.transactionType === 'Loan Payment' && t.code === g.code).length;
-            const totalCount = info.count || '—';
             return `
             <tr data-code="${escapeHtml(g.code)}">
-              <td class="drag-cell"><span class="drag-handle" title="Drag to reorder" style="cursor:grab">☰</span></td>
               <td>${i+1}</td>
               <td>${fmtDate(g.date)}</td>
               <td>${escapeHtml(g.debtor)}</td>
@@ -1576,14 +1008,13 @@ function renderLoan(){
               <td class="num">${fmtMoney(g.principal)}</td>
               <td>${escapeHtml(repaymentDateLabel(info))}</td>
               <td class="num">${fmtMoney(info.repaymentAmount)}</td>
-              <td class="num">${escapeHtml(String(paymentCount))} of ${escapeHtml(String(totalCount))}</td>
               <td class="num">${fmtMoney(loanBalance(g.code))}</td>
               <td class="row-actions">
                 <button class="icon-btn" data-edit="${escapeHtml(g.code)}" title="Edit loan">✎</button>
                 <button class="icon-btn" data-del="${escapeHtml(g.code)}" title="Delete loan">✕</button>
               </td>
             </tr>
-          `}).join('') : `<tr class="empty-row"><td colspan="11">No loans${(loanFilter.debtor||loanFilter.account||loanFilter.balance!=='all')?' match this filter':' yet'}.</td></tr>`}
+          `}).join('') : `<tr class="empty-row"><td colspan="9">No loans${(loanFilter.debtor||loanFilter.account||loanFilter.balance!=='all')?' match this filter':' yet'}.</td></tr>`}
         </tbody>
       </table>
     </div>
@@ -1610,63 +1041,9 @@ function renderLoan(){
     const ids = allTx.filter(t => t.code === code).map(t => t.id);
     await dbDeleteIds(ids);
     await reload();
-    // remove from loanOrder if present
-    if (loanOrder && loanOrder.includes(code)){
-      loanOrder = loanOrder.filter(c => c !== code);
-      await dbSetSetting('loanOrder', loanOrder);
-    }
     toast('Loan deleted');
     renderLoan();
   }));
-
-  // --- Drag & drop handlers for reorder ---
-  let draggedCode = null;
-  const loanRows = main.querySelectorAll('#loanBody tr[data-code]');
-  loanRows.forEach(tr => {
-    tr.draggable = true;
-    const code = tr.dataset.code;
-
-    tr.addEventListener('dragstart', (e) => {
-      draggedCode = code;
-      tr.style.opacity = '0.5';
-      try{ e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', code); }catch{}
-    });
-
-    tr.addEventListener('dragover', (e) => {
-      e.preventDefault();
-      e.dataTransfer.dropEffect = 'move';
-      tr.style.borderTop = '2px solid rgba(143,160,133,0.8)';
-    });
-
-    tr.addEventListener('dragleave', () => {
-      tr.style.borderTop = '';
-    });
-
-    tr.addEventListener('drop', async (e) => {
-      e.preventDefault();
-      tr.style.borderTop = '';
-      const targetCode = tr.dataset.code;
-      if (!draggedCode || draggedCode === targetCode) return;
-      // compute new order
-      const groupsAll = loanGroups();
-      ensureLoanOrderIncludesAll(groupsAll);
-      let currentOrder = loanOrder.slice();
-      // remove dragged
-      currentOrder = currentOrder.filter(c => c !== draggedCode);
-      // insert before target
-      const idx = currentOrder.indexOf(targetCode);
-      if (idx === -1) currentOrder.push(draggedCode);
-      else currentOrder.splice(idx, 0, draggedCode);
-      await saveLoanOrder(currentOrder);
-      renderLoan();
-    });
-
-    tr.addEventListener('dragend', () => {
-      draggedCode = null;
-      tr.style.opacity = '';
-      document.querySelectorAll('#loanBody tr').forEach(r => r.style.borderTop = '');
-    });
-  });
 }
 
 function openLoanForm(editing=null){
@@ -1829,14 +1206,6 @@ function openLoanForm(editing=null){
     }
     await dbAddMany(records);
     await reload();
-
-    // If new loan, add to loanOrder (front)
-    if (!editing){
-      loanOrder = loanOrder || [];
-      loanOrder = [code, ...loanOrder.filter(c => c !== code)];
-      await dbSetSetting('loanOrder', loanOrder);
-    }
-
     closeModal();
     toast(editing ? 'Loan updated' : 'Loan saved');
     renderLoan();
