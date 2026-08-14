@@ -135,17 +135,6 @@ input[type="file"]{ display:none; }
   max-width: 100%;
 }
 
-/* ============ STORAGE BANNER ============ */
-.storage-banner{
-  display:none; align-items:center; gap:12px; flex-wrap:wrap;
-  background: #F1E9D6; color: #6B4F17;
-  border-bottom: 1px solid #E3D3A4;
-  padding: 10px 18px;
-  font-size: 13px;
-  position: sticky; top:0; z-index: 40;
-}
-.storage-banner .btn{ padding:6px 12px; font-size:12.5px; }
-
 /* ============ MAIN ============ */
 .main{
   flex:1;
@@ -326,20 +315,6 @@ tbody tr.no-hover:hover{ background:transparent; cursor:default; }
 }
 .radio-chip.active{ background: var(--ink); color:#fff; border-color:var(--ink); }
 
-/* ============ ACCOUNT TRANSACTIONS MODAL (Report → click a row) ============ */
-.acct-tx-list{ max-height:380px; overflow-y:auto; margin-top:4px; }
-.acct-tx-row{
-  display:grid;
-  grid-template-columns: 78px 88px 1fr 1fr 96px;
-  gap:10px; align-items:center;
-  padding:9px 2px; border-top:1px solid var(--line-soft);
-  font-size:13px;
-}
-.acct-tx-row:first-child{ border-top:none; }
-.acct-tx-row .amt-pos{ color:var(--income); font-weight:600; }
-.acct-tx-row .amt-neg{ color:var(--expense); font-weight:600; }
-.acct-tx-row .atx-remarks{ color:var(--text-dim); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-
 /* ============ LOAN DETAIL / SCHEDULE ============ */
 .loan-summary-grid{
   display:grid; grid-template-columns: repeat(2,1fr);
@@ -406,41 +381,4 @@ tbody tr.no-hover:hover{ background:transparent; cursor:default; }
   .table-wrap{ overflow-x:auto; }
   .field-row{ flex-direction:column; gap:0; }
   .loan-summary-grid{ grid-template-columns: 1fr 1fr; }
-  .storage-banner{ padding:9px 14px; font-size:12.5px; }
-
-  /* Report table -> stacked cards on phone. PC keeps the normal <table> layout above. */
-  .report-table{ width:100%; }
-  .report-table thead{ display:none; }
-  .report-table tbody{ display:block; }
-  .report-table tbody tr{
-    display:block; padding:12px 14px 10px; border-top:1px solid var(--line-soft);
-  }
-  .report-table tbody tr:first-child{ border-top:none; }
-  .report-table tbody tr td{
-    display:flex; justify-content:space-between; align-items:center;
-    padding:4px 0; border:none; white-space:normal;
-  }
-  .report-table tbody tr td::before{
-    content: attr(data-label);
-    font-size:10.5px; text-transform:uppercase; letter-spacing:.05em;
-    color:var(--text-faint); font-weight:600;
-  }
-  .report-table tbody tr td:first-child::before{ content:none; }
-  .report-table tbody tr td:first-child{
-    font-family:var(--font-display); font-weight:600; font-size:15px;
-    padding-bottom:8px; justify-content:flex-start;
-  }
-
-  /* Account transactions modal -> stacked key/value rows on phone */
-  .acct-tx-row{
-    display:flex; flex-direction:column; align-items:flex-start; gap:3px;
-    padding:10px 2px;
-  }
-  .acct-tx-row [data-label]::before{
-    content: attr(data-label) ": ";
-    font-size:10px; text-transform:uppercase; letter-spacing:.04em;
-    color:var(--text-faint); font-weight:600;
-  }
-  .acct-tx-row .atx-amt{ align-self:flex-end; font-size:14.5px; }
-  .acct-tx-row .atx-remarks{ white-space:normal; }
 }
