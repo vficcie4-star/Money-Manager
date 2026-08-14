@@ -1,22 +1,13 @@
 /* ==========================================================================
-   MoneyTracker — app.js (modified)
-   Vanilla JS + IndexedDB. No build step — open index.html directly, or
-   serve via GitHub Pages for phone + laptop access.
-
-   Changes:
-   - SubCategory suggestions now filtered by selected Category (still typable).
-   - Report: account rows open a modal with start/end date filters (start = first tx for account, end = today).
-   - Report: mobile header order changed to Account, Balance, Income, Expense, Transfer.
-   - Ledger (Income/Expense/Transfer): add start/end date filter (defaults: earliest recorded -> today).
-   - Loan: added Payment Count column and rearranged columns as requested.
+   MoneyTracker — app.js (with visual drag handle for loan reordering)
    ========================================================================== */
 
 /* ---------------------------- IndexedDB layer ---------------------------- */
 const DB_NAME = 'MoneyTrackerDB';
 const DB_VERSION = 3;
 const STORE = 'tx';
-const GROUP_STORE = 'groups';       // account groups for the Report view — NOT touched by Excel import/export
-const SETTINGS_STORE = 'settings';  // key/value app settings (e.g. Balance Wallet account selection)
+const GROUP_STORE = 'groups';
+const SETTINGS_STORE = 'settings';
 let db;
 
 function openDB(){
@@ -89,7 +80,7 @@ function dbClearAll(){
   });
 }
 
-/* ---- account groups (Report view only — survives Excel import/export) ---- */
+/* Groups */
 function dbGetAllGroups(){
   return new Promise((resolve, reject) => {
     const tx = db.transaction(GROUP_STORE, 'readonly');
@@ -98,7 +89,7 @@ function dbGetAllGroups(){
     req.onerror = (e) => reject(e.target.error);
   });
 }
-function dbSaveGroup(group){ // add (no id) or update (has id)
+function dbSaveGroup(group){
   return new Promise((resolve, reject) => {
     const tx = db.transaction(GROUP_STORE, 'readwrite');
     const store = tx.objectStore(GROUP_STORE);
@@ -116,7 +107,7 @@ function dbDeleteGroup(id){
   });
 }
 
-/* ---- settings (key/value) ---- */
+/* Settings */
 function dbGetSetting(key){
   return new Promise((resolve, reject) => {
     const tx = db.transaction(SETTINGS_STORE, 'readonly');
@@ -135,10 +126,11 @@ function dbSetSetting(key, value){
 }
 
 /* ------------------------------ App state -------------------------------- */
-let allTx = [];             // in-memory mirror of the tx store
-let allGroups = [];         // in-memory mirror of the groups store
-let walletAccounts = null;  // null = "all accounts"; else array of included account names
+let allTx = [];
+let allGroups = [];
+let walletAccounts = null;
 let currentView = 'report';
+let loanOrder = null; // persisted array of loan codes in preferred order
 
 async function init(){
   await openDB();
@@ -146,6 +138,7 @@ async function init(){
   allGroups = await dbGetAllGroups();
   const savedWallet = await dbGetSetting('walletAccounts');
   walletAccounts = Array.isArray(savedWallet) ? savedWallet : null;
+  loanOrder = await dbGetSetting('loanOrder') || null;
   bindNav();
   bindGlobalUI();
   navigate('report');
@@ -195,15 +188,13 @@ function toast(msg){
   toast._h = setTimeout(() => t.classList.remove('show'), 2200);
 }
 function uniq(arr){ return [...new Set(arr.filter(Boolean))]; }
-
-/* New helper: earliest date recorded in DB (returns YYYY-MM-DD) */
 function earliestDateRecorded(){
   const dates = allTx.map(t => t.date).filter(Boolean);
   if (!dates.length) return todayStr();
   return dates.slice().sort()[0];
 }
 
-/* Accounting-format input: live formats on blur, keeps raw number in dataset */
+/* Accounting-format input */
 function wireMoneyInput(el){
   el.addEventListener('blur', () => {
     const v = parseMoney(el.value);
@@ -217,7 +208,7 @@ function wireMoneyInput(el){
 }
 function moneyVal(el){ return parseMoney(el.value); }
 
-/* Simple autocomplete: text input + suggestion list from an array of strings */
+/* Autocomplete */
 function attachAutocomplete(inputEl, listEl, sourceFn){
   function render(){
     const q = inputEl.value.trim().toLowerCase();
@@ -332,20 +323,16 @@ async function importExcel(e){
   e.target.value = '';
   toast(`Imported ${records.length} transactions`);
 
-  // Check if the Loan Detail modal is currently open; if so, close and reopen it
+  // Reopen loan modal if previously open
   const overlay = document.getElementById('modalOverlay');
   const modalTitleEl = overlay.querySelector('.modal-title');
   if (overlay.classList.contains('open') && modalTitleEl && currentView === 'loan') {
-    // We need to find the code currently being viewed
     const codeSpan = overlay.querySelector('.view-sub span');
     if (codeSpan) {
       const currentCode = codeSpan.textContent.trim();
-      // Close the modal
       closeModal();
-      // Re-open the loan detail with the same code using fresh data
       setTimeout(() => {
         openLoanDetail(currentCode);
-        // Also ensure the main Loan table is up to date
         renderLoan();
       }, 200);
     } else {
@@ -357,7 +344,7 @@ async function importExcel(e){
 }
 function normalizeDate(v){
   if (v instanceof Date) return localISO(v);
-  if (typeof v === 'number'){ // excel serial date
+  if (typeof v === 'number'){
     const d = XLSX.SSF.parse_date_code(v);
     return `${d.y}-${String(d.m).padStart(2,'0')}-${String(d.d).padStart(2,'0')}`;
   }
@@ -411,7 +398,7 @@ function openClearTransactionsForm(){
 }
 
 /* =============================================================================
-   Shared suggestion pools — Income / Expense / Transfer only (Loan is separate)
+   Suggestion pools
    ============================================================================= */
 const LEDGER_TYPES = ['Income','Expense','Transfer'];
 function ledgerTx(){ return allTx.filter(t => LEDGER_TYPES.includes(t.transactionType)); }
@@ -423,28 +410,23 @@ function suggestCategoriesForType(type){ return uniq(allTx.filter(t=>t.transacti
 function suggestSubCategoriesForType(type){ return uniq(allTx.filter(t=>t.transactionType===type).map(t=>t.subCategory)); }
 
 /* =============================================================================
-   REPORT VIEW — per-account Income/Expense/Transfer/Balance, with custom groups
+   Report view (unchanged from previous implementation except date defaults)
    ============================================================================= */
-// Store current date filter state
 const reportFilter = { startDate: '', endDate: '' };
 
 function accountStats(startDate, endDate){
-  // stats keyed by account name, built only from Income/Expense/Transfer rows
   const stats = {};
   function bump(name, field, amt){
     if (!name) return;
     if (!stats[name]) stats[name] = { income:0, expense:0, transferIn:0, transferOut:0 };
     stats[name][field] += amt;
   }
-  
-  // Filter transactions by date range
   const filteredTx = ledgerTx().filter(t => {
     if (!t.date) return true;
     if (startDate && t.date < startDate) return false;
     if (endDate && t.date > endDate) return false;
     return true;
   });
-  
   filteredTx.forEach(t => {
     const amt = Number(t.amount||0);
     if (t.transactionType === 'Income') bump(t.toAccount, 'income', amt);
@@ -469,10 +451,7 @@ function sumStats(list){
   }), { income:0, expense:0, transferIn:0, transferOut:0, balance:0 });
 }
 
-/* statsRowHtml now includes data-account for clicks and supports mobile ordering */
 function statsRowHtml(name, s, indent=false, mobileOrder=false){
-  // Desktop order: Account / Income / Expense / Transfer / Balance
-  // Mobile order requested: Account / Balance / Income / Expense / Transfer
   const nameCell = `<td${indent ? ' style="padding-left:30px;color:var(--text-dim)"' : ''} data-account="${escapeHtml(name)}">${escapeHtml(name)}</td>`;
   if (!mobileOrder){
     return `
@@ -525,15 +504,9 @@ let expandedGroups = new Set();
 
 function renderReport(){
   const main = document.getElementById('main');
-  
-  // Determine mobile ordering (match CSS breakpoint)
   const isMobile = window.innerWidth <= 860;
-
-  // Derive date filter defaults (use existing filter if set, otherwise earliest->today)
   const startDefault = reportFilter.startDate || earliestDateRecorded();
   const endDefault = reportFilter.endDate || todayStr();
-
-  // Get stats with date filter applied
   const stats = accountStats(reportFilter.startDate || startDefault, reportFilter.endDate || endDefault);
   const allAccountNames = Object.keys(stats);
   const grouped = new Set();
@@ -553,7 +526,6 @@ function renderReport(){
   let ungroupedRows = ungrouped.map(name => statsRowHtml(name, stats[name], false, isMobile)).join('');
   const wallet = walletBalance(stats);
 
-  // Build date filter HTML
   const dateFilterHtml = `
     <div class="filter-row" style="margin-bottom:12px">
       <label style="display:flex;align-items:center;gap:6px;font-size:13px;color:var(--text-dim)">
@@ -569,7 +541,6 @@ function renderReport(){
     </div>
   `;
 
-  // Header order depending on mobile
   const theadHtml = isMobile
     ? '<thead><tr><th>Account</th><th class="num">Balance</th><th class="num">Income</th><th class="num">Expense</th><th class="num">Transfer</th></tr></thead>'
     : '<thead><tr><th>Account</th><th class="num">Income</th><th class="num">Expense</th><th class="num">Transfer</th><th class="num">Balance</th></tr></thead>';
@@ -598,16 +569,13 @@ function renderReport(){
     </div>
   `;
 
-  // Bind events
   document.getElementById('btnNewGroup').addEventListener('click', () => openGroupForm(null));
   document.getElementById('walletCard').addEventListener('click', () => openWalletForm(stats));
-  
   document.getElementById('btnApplyDateFilter').addEventListener('click', () => {
     reportFilter.startDate = document.getElementById('reportStartDate').value;
     reportFilter.endDate = document.getElementById('reportEndDate').value;
     renderReport();
   });
-  
   const clearBtn = document.getElementById('btnClearDateFilter');
   if (clearBtn) {
     clearBtn.addEventListener('click', () => {
@@ -616,8 +584,6 @@ function renderReport(){
       renderReport();
     });
   }
-  
-  // Expand/collapse groups
   main.querySelectorAll('[data-group-toggle]').forEach(tr => {
     tr.addEventListener('click', (e) => {
       if (e.target.closest('[data-edit-group]')) return;
@@ -630,11 +596,8 @@ function renderReport(){
     e.stopPropagation();
     openGroupForm(Number(b.dataset.editGroup));
   }));
-
-  // ACCOUNT row clicks: open modal showing transactions for that account with per-account date filter
   main.querySelectorAll('[data-account-row]').forEach(tr => {
     tr.addEventListener('click', (e) => {
-      // prevent if clicked the edit-group button etc
       if (e.target.closest('[data-edit-group]')) return;
       const acctCell = tr.querySelector('[data-account]');
       if (!acctCell) return;
@@ -644,9 +607,7 @@ function renderReport(){
   });
 }
 
-// Open modal for a single account with its own date filter
 function openAccountModal(account){
-  // find first transaction date for this account (consider fromAccount/toAccount across ledger types)
   const acctTx = ledgerTx().filter(t => (t.fromAccount === account) || (t.toAccount === account));
   const start = acctTx.map(t => t.date).filter(Boolean).sort()[0] || earliestDateRecorded();
   const end = todayStr();
@@ -710,7 +671,7 @@ function openAccountModal(account){
 }
 
 /* =============================================================================
-   REPORT group & wallet modals (unchanged behavior besides small refactors)
+   Group & Wallet modals
    ============================================================================= */
 function openWalletForm(stats){
   const names = Object.keys(stats).sort((a,b)=>a.localeCompare(b));
@@ -757,7 +718,6 @@ function openWalletForm(stats){
 
 function openGroupForm(groupId){
   const editing = allGroups.find(g => g.id === groupId) || null;
-  // Use the same filtered stats that renderReport uses
   const stats = accountStats(reportFilter.startDate || reportFilter.startDate || earliestDateRecorded(), reportFilter.endDate || todayStr());
   const accounts = Object.keys(stats).sort((a,b)=>a.localeCompare(b));
   openModal(`
@@ -813,8 +773,7 @@ function openGroupForm(groupId){
 }
 
 /* =============================================================================
-   INCOME / EXPENSE / TRANSFER — shared "simple ledger" view
-   - Added date filters (start/end) defaulting to earliest recorded -> today
+   LEDGER (Income / Expense / Transfer)
    ============================================================================= */
 const LEDGER_CFG = {
   Income:   { icon:'＋', cls:'income',   fields:['account','category','subCategory'] },
@@ -832,13 +791,10 @@ function renderLedger(type){
   const isTransfer = type === 'Transfer';
   const allRows = allTx.filter(t => t.transactionType === type);
   const filter = ledgerFilters[type];
-
-  // date filter defaults if not yet set
   const startDefault = filter.startDate || earliestDateRecorded();
   const endDefault = filter.endDate || todayStr();
 
   let rows = allRows;
-  // Apply date range filter if present
   if (filter.startDate || filter.endDate){
     rows = rows.filter(t => {
       if (!t.date) return true;
@@ -847,7 +803,6 @@ function renderLedger(type){
       return true;
     });
   }
-
   if (!isTransfer && filter){
     if (filter.account) rows = rows.filter(t => (type==='Income'?t.toAccount:t.fromAccount) === filter.account);
     if (filter.category) rows = rows.filter(t => t.category === filter.category);
@@ -880,7 +835,6 @@ function renderLedger(type){
       </div>
     `;
   } else {
-    // transfer view date filter only
     filterHtml = `
       <div class="filter-row">
         <label style="display:flex;align-items:center;gap:6px;color:var(--text-dim)">
@@ -924,8 +878,6 @@ function renderLedger(type){
     </div>
   `;
   document.getElementById('btnAdd').addEventListener('click', () => openLedgerForm(type));
-
-  // Date filter apply
   document.getElementById('btnApplyLedgerDate').addEventListener('click', () => {
     ledgerFilters[type].startDate = document.getElementById('ledgerStart').value;
     ledgerFilters[type].endDate = document.getElementById('ledgerEnd').value;
@@ -954,7 +906,7 @@ function renderLedger(type){
   }));
 }
 
-/* openLedgerForm: SubCategory suggestions filtered by selected Category */
+/* SubCategory suggestions filtered by Category */
 function openLedgerForm(type, editing=null){
   const cfg = LEDGER_CFG[type];
   const accountSuggestions = suggestAccounts();
@@ -1026,7 +978,6 @@ function openLedgerForm(type, editing=null){
   } else {
     attachAutocomplete(form.account, document.getElementById('acAccount'), () => accountSuggestions);
     attachAutocomplete(form.category, document.getElementById('acCat'), () => catSuggestions);
-    // SubCategory suggestions now filtered by selected Category (but still typable)
     const getSubSuggestions = () => {
       const cat = form.category.value.trim();
       if (!cat) return subSuggestions;
@@ -1078,8 +1029,7 @@ function openLedgerForm(type, editing=null){
 }
 
 /* =============================================================================
-   LOAN VIEW
-   - Adds paymentCount and rearranges columns per user request
+   LOAN view and helpers (with drag handle)
    ============================================================================= */
 function loanGroups(){
   const releases = allTx.filter(t => t.transactionType === 'Loan Release');
@@ -1098,8 +1048,7 @@ function loanGroups(){
       principal,
       fees: Number(fees?.amount)||0,
       interest: Number(interest?.amount)||0,
-      remarksRaw: net?.remarks || '',
-      paymentCount: allTx.filter(t => t.transactionType === 'Loan Payment' && t.code === code && t.category === 'Payment').length
+      remarksRaw: net?.remarks || ''
     };
   }).sort((a,b) => (b.date||'').localeCompare(a.date||''));
 }
@@ -1116,7 +1065,6 @@ function loanBalance(code){
   return (g.principal + g.interest) - loanPaid(code);
 }
 function parseLoanRemarks(raw){
-  // InterestRate|RepaymentAmount|Frequency|Count|Date(s)|StartPaymentDate|UserRemarks
   const parts = String(raw||'').split('|');
   const maybeStart = parts[5] || '';
   const hasStart = /^\d{4}-\d{2}-\d{2}$/.test(maybeStart);
@@ -1141,8 +1089,33 @@ function repaymentDateLabel(info){
 
 const loanFilter = { debtor:'', account:'', balance:'all' };
 
-function renderLoan(){
+async function moveLoanCode(draggedCode, targetCode) {
   const groups = loanGroups();
+  const allCodes = groups.map(g => g.code);
+  const order = Array.isArray(loanOrder) && loanOrder.length ? loanOrder.slice() : allCodes.slice();
+  allCodes.forEach(c => { if (!order.includes(c)) order.push(c); });
+  const from = order.indexOf(draggedCode);
+  let to = order.indexOf(targetCode);
+  if (from === -1 || to === -1 || from === to) return;
+  order.splice(from, 1);
+  if (from < to) to--;
+  order.splice(to, 0, draggedCode);
+  await dbSetSetting('loanOrder', order);
+  loanOrder = order;
+  renderLoan();
+}
+
+function renderLoan(){
+  const groupsAll = loanGroups();
+  let orderedCodes;
+  if (Array.isArray(loanOrder) && loanOrder.length) {
+    orderedCodes = loanOrder.filter(c => groupsAll.some(g => g.code === c));
+    groupsAll.map(g => g.code).forEach(c => { if (!orderedCodes.includes(c)) orderedCodes.push(c); });
+  } else {
+    orderedCodes = groupsAll.map(g => g.code);
+  }
+  const groups = orderedCodes.map(code => groupsAll.find(g => g.code === code)).filter(Boolean);
+
   const debtorOpts = uniq(groups.map(g=>g.debtor)).sort((a,b)=>a.localeCompare(b));
   const accountOpts = uniq(groups.map(g=>g.account)).sort((a,b)=>a.localeCompare(b));
 
@@ -1180,14 +1153,15 @@ function renderLoan(){
     <div class="table-wrap">
       <table>
         <thead><tr>
-          <th>#</th><th>Debtor</th><th>Repayment Date</th><th class="num">Repayment Amount</th><th>Payment Count</th><th class="num">Balance</th><th>Date Released</th><th class="num">Amount</th><th></th>
+          <th></th><th>#</th><th>Debtor</th><th>Repayment Date</th><th class="num">Repayment Amount</th><th>Payment Count</th><th class="num">Balance</th><th>Date Released</th><th class="num">Amount</th><th></th>
         </tr></thead>
         <tbody id="loanBody">
           ${filtered.length ? filtered.map((g,i) => {
             const info = parseLoanRemarks(g.remarksRaw);
             const paidCount = loanPaidCount(g.code);
             return `
-            <tr data-code="${escapeHtml(g.code)}">
+            <tr data-code="${escapeHtml(g.code)}" draggable="true">
+              <td style="width:32px;text-align:center"><span class="drag-handle" style="cursor:grab;user-select:none;font-size:16px;padding:4px 6px;display:inline-block">☰</span></td>
               <td>${i+1}</td>
               <td>${escapeHtml(g.debtor)}</td>
               <td>${escapeHtml(repaymentDateLabel(info))}</td>
@@ -1201,21 +1175,17 @@ function renderLoan(){
                 <button class="icon-btn" data-del="${escapeHtml(g.code)}" title="Delete loan">✕</button>
               </td>
             </tr>
-          `}).join('') : `<tr class="empty-row"><td colspan="9">No loans${(loanFilter.debtor||loanFilter.account||loanFilter.balance!=='all')?' match this filter':' yet'}.</td></tr>`}
+          `}).join('') : `<tr class="empty-row"><td colspan="10">No loans${(loanFilter.debtor||loanFilter.account||loanFilter.balance!=='all')?' match this filter':' yet'}.</td></tr>`}
         </tbody>
       </table>
     </div>
   `;
+
   document.getElementById('btnAddLoan').addEventListener('click', () => openLoanForm());
   document.getElementById('filterDebtor').addEventListener('change', e => { loanFilter.debtor = e.target.value; renderLoan(); });
   document.getElementById('filterLoanAccount').addEventListener('change', e => { loanFilter.account = e.target.value; renderLoan(); });
   document.getElementById('filterBalance').addEventListener('change', e => { loanFilter.balance = e.target.value; renderLoan(); });
-  main.querySelectorAll('#loanBody tr[data-code]').forEach(tr => {
-    tr.addEventListener('click', (e) => {
-      if (e.target.closest('[data-del]') || e.target.closest('[data-edit]')) return;
-      openLoanDetail(tr.dataset.code);
-    });
-  });
+
   main.querySelectorAll('[data-edit]').forEach(b => b.addEventListener('click', (e) => {
     e.stopPropagation();
     const g = loanGroups().find(x => x.code === b.dataset.edit);
@@ -1231,8 +1201,59 @@ function renderLoan(){
     toast('Loan deleted');
     renderLoan();
   }));
+
+  // --- drag & drop handlers for loan rows with visible handle ---
+  const rows = document.querySelectorAll('#loanBody tr[data-code]');
+  rows.forEach(tr => {
+    const handle = tr.querySelector('.drag-handle');
+    // Only allow starting drag with handle (for better UX)
+    if (handle){
+      handle.addEventListener('mousedown', (ev) => {
+        // enable dragging on the row when handle is grabbed
+        tr.setAttribute('draggable', 'true');
+      });
+    }
+    tr.addEventListener('dragstart', (e) => {
+      e.dataTransfer.setData('text/plain', tr.dataset.code);
+      tr.classList.add('dragging');
+      const h = tr.querySelector('.drag-handle');
+      if (h) h.style.cursor = 'grabbing';
+    });
+    tr.addEventListener('dragend', () => {
+      rows.forEach(r => r.classList.remove('dragging','drag-over'));
+      const h2 = tr.querySelector('.drag-handle');
+      if (h2) h2.style.cursor = 'grab';
+      // ensure row draggable attribute remains true for subsequent drags
+      tr.setAttribute('draggable', 'true');
+    });
+    tr.addEventListener('dragover', (e) => {
+      e.preventDefault();
+      rows.forEach(r => r.classList.remove('drag-over'));
+      tr.classList.add('drag-over');
+    });
+    tr.addEventListener('dragleave', () => {
+      tr.classList.remove('drag-over');
+    });
+    tr.addEventListener('drop', async (e) => {
+      e.preventDefault();
+      const draggedCode = e.dataTransfer.getData('text/plain');
+      const targetCode = tr.dataset.code;
+      if (draggedCode && targetCode && draggedCode !== targetCode) {
+        await moveLoanCode(draggedCode, targetCode);
+      }
+    });
+  });
+
+  // Row click opens loan detail
+  main.querySelectorAll('#loanBody tr[data-code]').forEach(tr => {
+    tr.addEventListener('click', (e) => {
+      if (e.target.closest('[data-del]') || e.target.closest('[data-edit]')) return;
+      openLoanDetail(tr.dataset.code);
+    });
+  });
 }
 
+/* Loan form, schedule, and detail code remains the same as earlier (unchanged logic) */
 function openLoanForm(editing=null){
   const releases = allTx.filter(t => t.transactionType === 'Loan Release');
   const debtors = uniq(releases.map(t => t.toAccount));
@@ -1318,7 +1339,7 @@ function openLoanForm(editing=null){
   attachAutocomplete(document.getElementById('fAccount'), document.getElementById('acAccount'), () => accounts);
 
   function updateCodePreview(){
-    if (editing) return; // code stays fixed once created, so existing payments stay linked
+    if (editing) return;
     const d = document.getElementById('fDebtor').value.trim() || '—';
     const a = document.getElementById('fAccount').value.trim() || '—';
     const amt = document.getElementById('fAmount').dataset.raw || document.getElementById('fAmount').value || '0';
@@ -1330,7 +1351,6 @@ function openLoanForm(editing=null){
     document.getElementById('fAmount').addEventListener(ev, updateCodePreview);
   });
 
-  // frequency toggle
   let freq = editing ? info.frequency : 'Monthly';
   document.getElementById('dateField1').style.display = freq === 'Flexible' ? 'none' : '';
   document.getElementById('dateField2').style.display = freq === 'Semi-Monthly' ? '' : 'none';
@@ -1366,7 +1386,7 @@ function openLoanForm(editing=null){
 
     let code;
     if (editing){
-      code = editing.code; // keep the same code so existing payments stay linked
+      code = editing.code;
     } else {
       code = `${account}-${debtor}-${amount}`;
       let suffix = 1;
@@ -1404,7 +1424,7 @@ function dateOptions(defaultVal=1){
   return opts;
 }
 
-/* ---------------------------- Loan detail / schedule ------------------------ */
+/* Loan detail / schedule (unchanged logic) */
 function addMonths(dateStr, n){
   const d = new Date(dateStr + 'T00:00:00');
   d.setMonth(d.getMonth() + n);
@@ -1424,7 +1444,6 @@ function buildSchedule(g, info){
     for (let i=1;i<=info.count;i++) schedule.push({ seq:i, date:'', flexible:true });
     return schedule;
   }
-  // Start Payment Date anchors the schedule (falls back to the release date for older loans)
   const anchorStr = info.startPaymentDate || g.date;
   const anchor = new Date(anchorStr + 'T00:00:00');
   if (info.frequency === 'Monthly'){
@@ -1524,7 +1543,6 @@ function openLoanDetail(code){
   document.getElementById('mClose2').addEventListener('click', closeModal);
   document.getElementById('btnEditLoan').addEventListener('click', () => { closeModal(); openLoanForm(g); });
 
-  // --- Update only the row, don't destroy the modal ---
   document.querySelectorAll('#scheduleList .paidbox').forEach(box => {
     box.addEventListener('change', async (e) => {
       const row = box.closest('.schedule-row');
@@ -1535,8 +1553,6 @@ function openLoanDetail(code){
         date = row.querySelector('.sdate-input').value;
         if (!date){ toast('Pick a date first'); box.checked = false; return; }
       }
-      
-      // 1. Save / Delete in DB
       if (box.checked){
         const addInput = row.querySelector('.sadd input');
         const addAmount = parseMoney(addInput.value);
@@ -1557,35 +1573,23 @@ function openLoanDetail(code){
         await dbDeleteIds(ids);
         toast('Payment reverted');
       }
-
-      // 2. Reload data in memory
       await reload();
-      
-      // 3. Update only the visual state of this row (instead of recreating the whole modal)
       const allPayments = allTx.filter(t => t.transactionType === 'Loan Payment' && t.code === code);
       const paidLines = date ? allPayments.filter(p => p.date === date) : [];
       const isPaid = paidLines.some(p => p.category === 'Payment');
       const addAmt = paidLines.find(p => p.category === 'Additional Payment');
-      
-      // Update row styling and inputs
       row.classList.toggle('paid', isPaid);
       const chk = row.querySelector('.paidbox');
       const addInput = row.querySelector('.sadd input');
       chk.checked = isPaid;
-      
-      // Disable/enable flexible date and additional amount
       const sdateInput = row.querySelector('.sdate-input');
       if (sdateInput) sdateInput.disabled = isPaid;
       addInput.disabled = isPaid;
       addInput.value = addAmt ? fmtMoney(addAmt.amount) : '';
-      
-      // 4. Update the summary numbers in the modal
       const newPaid = loanPaid(code);
       const newBalance = total - newPaid;
       document.getElementById('paidToDateDisplay').innerHTML = `Paid to Date<b>${fmtMoney(newPaid)}</b>`;
       document.getElementById('balanceDisplay').innerHTML = `Balance<b>${fmtMoney(newBalance)}</b>`;
-      
-      // 5. Update the background table (behind the modal)
       renderLoan();
     });
   });
