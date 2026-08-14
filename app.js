@@ -1,5 +1,5 @@
 /* ==========================================================================
-   MoneyTracker — app.js (with visual drag handle for loan reordering)
+   MoneyTracker — app.js (loan transactions view + edit/delete per-line)
    ========================================================================== */
 
 /* ---------------------------- IndexedDB layer ---------------------------- */
@@ -410,7 +410,7 @@ function suggestCategoriesForType(type){ return uniq(allTx.filter(t=>t.transacti
 function suggestSubCategoriesForType(type){ return uniq(allTx.filter(t=>t.transactionType===type).map(t=>t.subCategory)); }
 
 /* =============================================================================
-   Report view (unchanged from previous implementation except date defaults)
+   Report view
    ============================================================================= */
 const reportFilter = { startDate: '', endDate: '' };
 
@@ -1017,6 +1017,7 @@ function openLedgerForm(type, editing=null){
     }
     if (editing){
       rec.id = editing.id;
+      rec.code = editing.code || '';
       await dbPut(rec);
     } else {
       await dbAddMany([rec]);
@@ -1029,7 +1030,7 @@ function openLedgerForm(type, editing=null){
 }
 
 /* =============================================================================
-   LOAN view and helpers (with drag handle)
+   LOAN view and helpers (drag handle + transactions modal + edit/delete per tx)
    ============================================================================= */
 function loanGroups(){
   const releases = allTx.filter(t => t.transactionType === 'Loan Release');
@@ -1172,6 +1173,7 @@ function renderLoan(){
               <td class="num">${fmtMoney(g.principal)}</td>
               <td class="row-actions">
                 <button class="icon-btn" data-edit="${escapeHtml(g.code)}" title="Edit loan">✎</button>
+                <button class="icon-btn" data-view-tx="${escapeHtml(g.code)}" title="Transactions">▦</button>
                 <button class="icon-btn" data-del="${escapeHtml(g.code)}" title="Delete loan">✕</button>
               </td>
             </tr>
@@ -1202,14 +1204,18 @@ function renderLoan(){
     renderLoan();
   }));
 
+  // Transactions button
+  main.querySelectorAll('[data-view-tx]').forEach(b => b.addEventListener('click', (e) => {
+    e.stopPropagation();
+    openLoanTransactions(b.dataset.viewTx);
+  }));
+
   // --- drag & drop handlers for loan rows with visible handle ---
   const rows = document.querySelectorAll('#loanBody tr[data-code]');
   rows.forEach(tr => {
     const handle = tr.querySelector('.drag-handle');
-    // Only allow starting drag with handle (for better UX)
     if (handle){
       handle.addEventListener('mousedown', (ev) => {
-        // enable dragging on the row when handle is grabbed
         tr.setAttribute('draggable', 'true');
       });
     }
@@ -1223,7 +1229,6 @@ function renderLoan(){
       rows.forEach(r => r.classList.remove('dragging','drag-over'));
       const h2 = tr.querySelector('.drag-handle');
       if (h2) h2.style.cursor = 'grab';
-      // ensure row draggable attribute remains true for subsequent drags
       tr.setAttribute('draggable', 'true');
     });
     tr.addEventListener('dragover', (e) => {
@@ -1247,13 +1252,153 @@ function renderLoan(){
   // Row click opens loan detail
   main.querySelectorAll('#loanBody tr[data-code]').forEach(tr => {
     tr.addEventListener('click', (e) => {
-      if (e.target.closest('[data-del]') || e.target.closest('[data-edit]')) return;
+      if (e.target.closest('[data-del]') || e.target.closest('[data-edit]') || e.target.closest('[data-view-tx]')) return;
       openLoanDetail(tr.dataset.code);
     });
   });
 }
 
-/* Loan form, schedule, and detail code remains the same as earlier (unchanged logic) */
+/* --- NEW: open modal listing all transactions for a loan code (release + payments) --- */
+function openLoanTransactions(code){
+  const txs = allTx.filter(t => t.code === code).slice().sort((a,b) => ((a.date||'') + String(a.id)).localeCompare((b.date||'') + String(b.id)));
+  const rowsHtml = txs.map(t => `
+    <tr data-id="${t.id}">
+      <td>${fmtDate(t.date)}</td>
+      <td>${escapeHtml(t.transactionType)}</td>
+      <td>${escapeHtml(t.fromAccount || '—')}</td>
+      <td>${escapeHtml(t.toAccount || '—')}</td>
+      <td class="num">${fmtMoney(t.amount)}</td>
+      <td>${escapeHtml(t.category || '')}</td>
+      <td>${escapeHtml(t.subCategory || '')}</td>
+      <td>${escapeHtml(t.remarks || '')}</td>
+      <td class="row-actions">
+        <button class="icon-btn" data-edit-tx="${t.id}" title="Edit">✎</button>
+        <button class="icon-btn" data-delete-tx="${t.id}" title="Delete">✕</button>
+      </td>
+    </tr>
+  `).join('') || `<tr class="empty-row"><td colspan="9">No transactions for ${escapeHtml(code)}.</td></tr>`;
+
+  openModal(`
+    <div class="modal-close-row">
+      <h3 class="modal-title">Transactions — ${escapeHtml(code)}</h3>
+      <button class="modal-x" id="mClose">✕</button>
+    </div>
+    <div style="max-height:420px;overflow:auto" class="table-wrap"">
+      <table>
+        <thead><tr><th>Date</th><th>Type</th><th>From</th><th>To</th><th class="num">Amount</th><th>Category</th><th>SubCat</th><th>Remarks</th><th></th></tr></thead>
+        <tbody id="loanTxBody">${rowsHtml}</tbody>
+      </table>
+    </div>
+    <div class="modal-actions">
+      <button class="btn" id="mClose2">Close</button>
+    </div>
+  `, true);
+
+  document.getElementById('mClose').addEventListener('click', closeModal);
+  document.getElementById('mClose2').addEventListener('click', closeModal);
+
+  // edit handlers
+  document.querySelectorAll('[data-edit-tx]').forEach(b => b.addEventListener('click', (e) => {
+    const id = Number(b.dataset.editTx);
+    const tx = allTx.find(x => x.id === id);
+    if (tx) openEditTransaction(tx, async () => {
+      await reload();
+      // refresh modal content
+      openLoanTransactions(code);
+      // also refresh loan list / detail if open
+      renderLoan();
+    });
+  }));
+
+  // delete handlers
+  document.querySelectorAll('[data-delete-tx]').forEach(b => b.addEventListener('click', async (e) => {
+    const id = Number(b.dataset.deleteTx);
+    if (!confirm('Delete this transaction? This cannot be undone.')) return;
+    await dbDeleteIds([id]);
+    await reload();
+    toast('Transaction deleted');
+    // refresh modal and loan list
+    openLoanTransactions(code);
+    renderLoan();
+  }));
+}
+
+/* --- NEW: generic edit transaction modal --- */
+function openEditTransaction(tx, onSaved){
+  // tx: full transaction record object
+  openModal(`
+    <div class="modal-close-row">
+      <h3 class="modal-title">Edit Transaction</h3>
+      <button class="modal-x" id="mClose">✕</button>
+    </div>
+    <form id="editTxForm">
+      <div class="field-row">
+        <div class="field"><label>Date</label><input type="date" name="date" value="${tx.date || ''}" required></div>
+        <div class="field"><label>Type</label><input type="text" readonly value="${escapeHtml(tx.transactionType)}"></div>
+      </div>
+      <div class="field-row">
+        <div class="field"><label>From Account</label><input type="text" name="fromAccount" value="${escapeHtml(tx.fromAccount || '')}"></div>
+        <div class="field"><label>To Account</label><input type="text" name="toAccount" value="${escapeHtml(tx.toAccount || '')}"></div>
+      </div>
+      <div class="field-row">
+        <div class="field"><label>Amount</label><input type="text" name="amount" id="editAmount" value="${fmtMoney(tx.amount)}" required></div>
+        <div class="field"><label>Code</label><input type="text" name="code" readonly value="${escapeHtml(tx.code || '')}"></div>
+      </div>
+      <div class="field-row">
+        <div class="field"><label>Category</label><input type="text" name="category" value="${escapeHtml(tx.category || '')}"></div>
+        <div class="field"><label>SubCategory</label><input type="text" name="subCategory" value="${escapeHtml(tx.subCategory || '')}"></div>
+      </div>
+      <div class="field"><label>Remarks</label><textarea name="remarks">${escapeHtml(tx.remarks || '')}</textarea></div>
+      <div class="modal-actions">
+        <button type="button" class="btn btn-danger" id="btnDeleteSingle" style="margin-right:auto">Delete</button>
+        <button type="button" class="btn" id="mCancel">Cancel</button>
+        <button type="submit" class="btn btn-primary">Save</button>
+      </div>
+    </form>
+  `, true);
+
+  document.getElementById('mClose').addEventListener('click', closeModal);
+  document.getElementById('mCancel').addEventListener('click', closeModal);
+
+  const amtEl = document.getElementById('editAmount');
+  wireMoneyInput(amtEl);
+  amtEl.dataset.raw = tx.amount;
+
+  document.getElementById('btnDeleteSingle').addEventListener('click', async () => {
+    if (!confirm('Delete this transaction?')) return;
+    await dbDeleteIds([tx.id]);
+    await reload();
+    closeModal();
+    toast('Transaction deleted');
+    if (onSaved) await onSaved();
+  });
+
+  document.getElementById('editTxForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const form = e.target;
+    const updated = {
+      id: tx.id,
+      date: form.date.value,
+      transactionType: tx.transactionType,
+      fromAccount: form.fromAccount.value.trim(),
+      toAccount: form.toAccount.value.trim(),
+      code: form.code.value,
+      amount: moneyVal(amtEl),
+      category: form.category.value.trim(),
+      subCategory: form.subCategory.value.trim(),
+      remarks: form.remarks.value.trim()
+    };
+    await dbPut(updated);
+    await reload();
+    toast('Transaction updated');
+    closeModal();
+    if (onSaved) await onSaved();
+  });
+}
+
+/* =============================================================================
+   Loan form, schedule, and detail (unchanged logic except keeping render calls)
+   ============================================================================= */
 function openLoanForm(editing=null){
   const releases = allTx.filter(t => t.transactionType === 'Loan Release');
   const debtors = uniq(releases.map(t => t.toAccount));
@@ -1535,6 +1680,7 @@ function openLoanDetail(code){
     </div>
     <div class="modal-actions">
       <button type="button" class="btn" id="btnEditLoan">Edit Loan</button>
+      <button type="button" class="btn" id="btnViewAllTx">View All Transactions</button>
       <button type="button" class="btn" id="mClose2">Close</button>
     </div>
   `, true);
@@ -1542,6 +1688,7 @@ function openLoanDetail(code){
   document.getElementById('mClose').addEventListener('click', closeModal);
   document.getElementById('mClose2').addEventListener('click', closeModal);
   document.getElementById('btnEditLoan').addEventListener('click', () => { closeModal(); openLoanForm(g); });
+  document.getElementById('btnViewAllTx').addEventListener('click', () => openLoanTransactions(g.code));
 
   document.querySelectorAll('#scheduleList .paidbox').forEach(box => {
     box.addEventListener('change', async (e) => {
