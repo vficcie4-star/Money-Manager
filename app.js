@@ -1,6 +1,6 @@
 /* ==========================================================================
    MoneyTracker — app.js
-   (Loan table columns reorder + regenerate loan code when editing Loan Release)
+   (Added Next Payment sort toggle in Loan view; disables drag while sorted)
    ========================================================================== */
 
 /* ---------------------------- IndexedDB layer ---------------------------- */
@@ -132,6 +132,9 @@ let allGroups = [];
 let walletAccounts = null;
 let currentView = 'report';
 let loanOrder = null; // persisted array of loan codes in preferred order
+
+// NEW: sort state for Next Payment column: null (original) or 'asc' (oldest-first)
+let loanNextSort = null;
 
 async function init(){
   await openDB();
@@ -1176,7 +1179,7 @@ async function moveLoanCode(draggedCode, targetCode) {
   renderLoan();
 }
 
-/* Render Loan view with new column order:
+/* Render Loan view with new column order and Next Payment sort toggle:
    #, Debtor, Next Payment, Repayment Amount, Account, Payment Count, Balance, Amount, Code
 */
 function renderLoan(){
@@ -1203,10 +1206,18 @@ function renderLoan(){
     });
   }
 
+  // Compute display order based on loanNextSort state
+  let displayGroups = filtered;
+  if (loanNextSort === 'asc'){
+    const mapped = filtered.map(g => ({ g, next: getNextPaymentDateForCode(g.code) || '9999-12-31' }));
+    mapped.sort((a,b) => (a.next < b.next ? -1 : (a.next > b.next ? 1 : 0)));
+    displayGroups = mapped.map(x => x.g);
+  }
+
   const main = document.getElementById('main');
   main.innerHTML = `
     <div class="view-header">
-      <div><h1 class="view-title">Loan</h1><div class="view-sub">${filtered.length} of ${groups.length} loan${groups.length===1?'':'s'}</div></div>
+      <div><h1 class="view-title">Loan</h1><div class="view-sub">${displayGroups.length} of ${groups.length} loan${groups.length===1?'':'s'}</div></div>
       <button class="btn btn-primary loan" id="btnAddLoan">+ Add Loan</button>
     </div>
     <div class="filter-row">
@@ -1227,15 +1238,19 @@ function renderLoan(){
     <div class="table-wrap">
       <table>
         <thead><tr>
-          <th></th><th>#</th><th>Debtor</th><th>Next Payment</th><th class="num">Repayment Amount</th><th>Account</th><th>Payment Count</th><th class="num">Balance</th><th class="num">Amount</th><th>Code</th><th></th>
+          <th></th><th>#</th><th>Debtor</th>
+          <th>Next Payment <button id="btnToggleNextSort" class="icon-btn" title="${loanNextSort === 'asc' ? 'Showing oldest first — click to restore original' : 'Sort by next payment (oldest first)'}">${loanNextSort === 'asc' ? '↑' : '⇅'}</button></th>
+          <th class="num">Repayment Amount</th><th>Account</th><th>Payment Count</th><th class="num">Balance</th><th class="num">Amount</th><th>Code</th><th></th>
         </tr></thead>
         <tbody id="loanBody">
-          ${filtered.length ? filtered.map((g,i) => {
+          ${displayGroups.length ? displayGroups.map((g,i) => {
             const info = parseLoanRemarks(g.remarksRaw);
             const paidCount = loanPaidCount(g.code);
             const nextPaymentDate = getNextPaymentDateForCode(g.code);
+            // when sorted, disable draggable attribute in the DOM
+            const draggableAttr = loanNextSort === null ? 'draggable="true"' : '';
             return `
-            <tr data-code="${escapeHtml(g.code)}" draggable="true">
+            <tr data-code="${escapeHtml(g.code)}" ${draggableAttr}>
               <td style="width:32px;text-align:center"><span class="drag-handle" style="cursor:grab;user-select:none;font-size:16px;padding:4px 6px;display:inline-block">☰</span></td>
               <td>${i+1}</td>
               <td>${escapeHtml(g.debtor)}</td>
@@ -1263,6 +1278,13 @@ function renderLoan(){
   document.getElementById('filterLoanAccount').addEventListener('change', e => { loanFilter.account = e.target.value; renderLoan(); });
   document.getElementById('filterBalance').addEventListener('change', e => { loanFilter.balance = e.target.value; renderLoan(); });
 
+  // Toggle Next Payment sorting
+  const sortBtn = document.getElementById('btnToggleNextSort');
+  sortBtn.addEventListener('click', () => {
+    loanNextSort = loanNextSort === 'asc' ? null : 'asc';
+    renderLoan();
+  });
+
   main.querySelectorAll('[data-edit]').forEach(b => b.addEventListener('click', (e) => {
     e.stopPropagation();
     const g = loanGroups().find(x => x.code === b.dataset.edit);
@@ -1285,44 +1307,49 @@ function renderLoan(){
     openLoanTransactions(b.dataset.viewTx);
   }));
 
-  // --- drag & drop handlers for loan rows with visible handle ---
+  // If not sorted, enable drag handlers; otherwise disable dragging
   const rows = document.querySelectorAll('#loanBody tr[data-code]');
-  rows.forEach(tr => {
-    const handle = tr.querySelector('.drag-handle');
-    if (handle){
-      handle.addEventListener('mousedown', (ev) => {
+  if (loanNextSort === null) {
+    rows.forEach(tr => {
+      const handle = tr.querySelector('.drag-handle');
+      if (handle){
+        handle.addEventListener('mousedown', (ev) => {
+          tr.setAttribute('draggable', 'true');
+        });
+      }
+      tr.addEventListener('dragstart', (e) => {
+        e.dataTransfer.setData('text/plain', tr.dataset.code);
+        tr.classList.add('dragging');
+        const h = tr.querySelector('.drag-handle');
+        if (h) h.style.cursor = 'grabbing';
+      });
+      tr.addEventListener('dragend', () => {
+        Array.from(rows).forEach(r => r.classList.remove('dragging','drag-over'));
+        const h2 = tr.querySelector('.drag-handle');
+        if (h2) h2.style.cursor = 'grab';
         tr.setAttribute('draggable', 'true');
       });
-    }
-    tr.addEventListener('dragstart', (e) => {
-      e.dataTransfer.setData('text/plain', tr.dataset.code);
-      tr.classList.add('dragging');
-      const h = tr.querySelector('.drag-handle');
-      if (h) h.style.cursor = 'grabbing';
+      tr.addEventListener('dragover', (e) => {
+        e.preventDefault();
+        Array.from(rows).forEach(r => r.classList.remove('drag-over'));
+        tr.classList.add('drag-over');
+      });
+      tr.addEventListener('dragleave', () => {
+        tr.classList.remove('drag-over');
+      });
+      tr.addEventListener('drop', async (e) => {
+        e.preventDefault();
+        const draggedCode = e.dataTransfer.getData('text/plain');
+        const targetCode = tr.dataset.code;
+        if (draggedCode && targetCode && draggedCode !== targetCode) {
+          await moveLoanCode(draggedCode, targetCode);
+        }
+      });
     });
-    tr.addEventListener('dragend', () => {
-      rows.forEach(r => r.classList.remove('dragging','drag-over'));
-      const h2 = tr.querySelector('.drag-handle');
-      if (h2) h2.style.cursor = 'grab';
-      tr.setAttribute('draggable', 'true');
-    });
-    tr.addEventListener('dragover', (e) => {
-      e.preventDefault();
-      rows.forEach(r => r.classList.remove('drag-over'));
-      tr.classList.add('drag-over');
-    });
-    tr.addEventListener('dragleave', () => {
-      tr.classList.remove('drag-over');
-    });
-    tr.addEventListener('drop', async (e) => {
-      e.preventDefault();
-      const draggedCode = e.dataTransfer.getData('text/plain');
-      const targetCode = tr.dataset.code;
-      if (draggedCode && targetCode && draggedCode !== targetCode) {
-        await moveLoanCode(draggedCode, targetCode);
-      }
-    });
-  });
+  } else {
+    // ensure rows are not draggable in the DOM when sorted
+    rows.forEach(r => r.removeAttribute('draggable'));
+  }
 
   // Row click opens loan detail
   main.querySelectorAll('#loanBody tr[data-code]').forEach(tr => {
