@@ -1,5 +1,6 @@
 /* ==========================================================================
-   MoneyTracker — app.js (loan transactions view + edit/delete per-line)
+   MoneyTracker — app.js
+   (Loan table columns reorder + regenerate loan code when editing Loan Release)
    ========================================================================== */
 
 /* ---------------------------- IndexedDB layer ---------------------------- */
@@ -1030,7 +1031,7 @@ function openLedgerForm(type, editing=null){
 }
 
 /* =============================================================================
-   LOAN view and helpers (drag handle + transactions modal + edit/delete per tx)
+   LOAN helpers + view updates (Next Payment calculation included)
    ============================================================================= */
 function loanGroups(){
   const releases = allTx.filter(t => t.transactionType === 'Loan Release');
@@ -1088,8 +1089,77 @@ function repaymentDateLabel(info){
   return info.dateSpec ? `${info.dateSpec} of month` : '—';
 }
 
+/* Build schedule utilities */
+function addMonths(dateStr, n){
+  const d = new Date(dateStr + 'T00:00:00');
+  d.setMonth(d.getMonth() + n);
+  return d;
+}
+function setDay(date, day){
+  const d = new Date(date);
+  const maxDay = new Date(d.getFullYear(), d.getMonth()+1, 0).getDate();
+  d.setDate(Math.min(day, maxDay));
+  return d;
+}
+function iso(d){ return localISO(d); }
+
+function buildSchedule(g, info){
+  const schedule = [];
+  if (info.frequency === 'Flexible'){
+    for (let i=1;i<=info.count;i++) schedule.push({ seq:i, date:'', flexible:true });
+    return schedule;
+  }
+  const anchorStr = info.startPaymentDate || g.date;
+  const anchor = new Date(anchorStr + 'T00:00:00');
+  if (info.frequency === 'Monthly'){
+    const day = parseInt(info.dateSpec) || 1;
+    let offset = 0;
+    let d = setDay(anchor, day);
+    if (d < anchor){ offset = 1; d = setDay(addMonths(anchorStr, 1), day); }
+    for (let i=1;i<=info.count;i++){
+      schedule.push({ seq:i, date: iso(d) });
+      offset++;
+      d = setDay(addMonths(anchorStr, offset), day);
+    }
+    return schedule;
+  }
+  if (info.frequency === 'Semi-Monthly'){
+    const days = info.dateSpec.split(',').map(n => parseInt(n)).filter(Boolean).sort((a,b)=>a-b);
+    if (days.length < 2) days.push(days[0]+15 || 30);
+    let cursorMonth = 0;
+    const candidates = [];
+    while (candidates.length < info.count + days.length){
+      for (const day of days){
+        const d = setDay(addMonths(anchorStr, cursorMonth), day);
+        if (d >= anchor) candidates.push(d);
+      }
+      cursorMonth++;
+    }
+    candidates.sort((a,b) => a-b);
+    candidates.slice(0, info.count).forEach((d,i) => schedule.push({ seq:i+1, date: iso(d) }));
+    return schedule;
+  }
+  return schedule;
+}
+
+/* Find next unpaid scheduled date */
+function getNextPaymentDateForCode(code){
+  const g = loanGroups().find(x => x.code === code);
+  if (!g) return '';
+  const info = parseLoanRemarks(g.remarksRaw);
+  const schedule = buildSchedule(g, info);
+  const payments = allTx.filter(t => t.transactionType === 'Loan Payment' && t.code === code && t.category === 'Payment');
+  for (const row of schedule){
+    if (!row.date) continue;
+    const paidOnDate = payments.some(p => p.date === row.date);
+    if (!paidOnDate) return row.date;
+  }
+  return '';
+}
+
 const loanFilter = { debtor:'', account:'', balance:'all' };
 
+/* Persisted custom loan ordering */
 async function moveLoanCode(draggedCode, targetCode) {
   const groups = loanGroups();
   const allCodes = groups.map(g => g.code);
@@ -1106,6 +1176,9 @@ async function moveLoanCode(draggedCode, targetCode) {
   renderLoan();
 }
 
+/* Render Loan view with new column order:
+   #, Debtor, Next Payment, Repayment Amount, Account, Payment Count, Balance, Amount, Code
+*/
 function renderLoan(){
   const groupsAll = loanGroups();
   let orderedCodes;
@@ -1154,30 +1227,32 @@ function renderLoan(){
     <div class="table-wrap">
       <table>
         <thead><tr>
-          <th></th><th>#</th><th>Debtor</th><th>Repayment Date</th><th class="num">Repayment Amount</th><th>Payment Count</th><th class="num">Balance</th><th>Date Released</th><th class="num">Amount</th><th></th>
+          <th></th><th>#</th><th>Debtor</th><th>Next Payment</th><th class="num">Repayment Amount</th><th>Account</th><th>Payment Count</th><th class="num">Balance</th><th class="num">Amount</th><th>Code</th><th></th>
         </tr></thead>
         <tbody id="loanBody">
           ${filtered.length ? filtered.map((g,i) => {
             const info = parseLoanRemarks(g.remarksRaw);
             const paidCount = loanPaidCount(g.code);
+            const nextPaymentDate = getNextPaymentDateForCode(g.code);
             return `
             <tr data-code="${escapeHtml(g.code)}" draggable="true">
               <td style="width:32px;text-align:center"><span class="drag-handle" style="cursor:grab;user-select:none;font-size:16px;padding:4px 6px;display:inline-block">☰</span></td>
               <td>${i+1}</td>
               <td>${escapeHtml(g.debtor)}</td>
-              <td>${escapeHtml(repaymentDateLabel(info))}</td>
+              <td>${nextPaymentDate ? fmtDate(nextPaymentDate) : '—'}</td>
               <td class="num">${fmtMoney(info.repaymentAmount)}</td>
+              <td>${escapeHtml(g.account)}</td>
               <td>${paidCount} of ${info.count || 0}</td>
               <td class="num">${fmtMoney(loanBalance(g.code))}</td>
-              <td>${fmtDate(g.date)}</td>
               <td class="num">${fmtMoney(g.principal)}</td>
+              <td style="font-family:var(--font-mono)">${escapeHtml(g.code)}</td>
               <td class="row-actions">
                 <button class="icon-btn" data-edit="${escapeHtml(g.code)}" title="Edit loan">✎</button>
                 <button class="icon-btn" data-view-tx="${escapeHtml(g.code)}" title="Transactions">▦</button>
                 <button class="icon-btn" data-del="${escapeHtml(g.code)}" title="Delete loan">✕</button>
               </td>
             </tr>
-          `}).join('') : `<tr class="empty-row"><td colspan="10">No loans${(loanFilter.debtor||loanFilter.account||loanFilter.balance!=='all')?' match this filter':' yet'}.</td></tr>`}
+          `}).join('') : `<tr class="empty-row"><td colspan="11">No loans${(loanFilter.debtor||loanFilter.account||loanFilter.balance!=='all')?' match this filter':' yet'}.</td></tr>`}
         </tbody>
       </table>
     </div>
@@ -1258,7 +1333,7 @@ function renderLoan(){
   });
 }
 
-/* --- NEW: open modal listing all transactions for a loan code (release + payments) --- */
+/* --- Transactions modal + edit/delete per-line --- */
 function openLoanTransactions(code){
   const txs = allTx.filter(t => t.code === code).slice().sort((a,b) => ((a.date||'') + String(a.id)).localeCompare((b.date||'') + String(b.id)));
   const rowsHtml = txs.map(t => `
@@ -1297,15 +1372,14 @@ function openLoanTransactions(code){
   document.getElementById('mClose').addEventListener('click', closeModal);
   document.getElementById('mClose2').addEventListener('click', closeModal);
 
-  // edit handlers
+  // edit handlers (pass callback that receives newCode if changed)
   document.querySelectorAll('[data-edit-tx]').forEach(b => b.addEventListener('click', (e) => {
     const id = Number(b.dataset.editTx);
     const tx = allTx.find(x => x.id === id);
-    if (tx) openEditTransaction(tx, async () => {
+    if (tx) openEditTransaction(tx, async (newCode) => {
       await reload();
-      // refresh modal content
-      openLoanTransactions(code);
-      // also refresh loan list / detail if open
+      // reopen transactions modal for the updated code (if changed) or the original code
+      openLoanTransactions(newCode || code);
       renderLoan();
     });
   }));
@@ -1317,15 +1391,15 @@ function openLoanTransactions(code){
     await dbDeleteIds([id]);
     await reload();
     toast('Transaction deleted');
-    // refresh modal and loan list
     openLoanTransactions(code);
     renderLoan();
   }));
 }
 
-/* --- NEW: generic edit transaction modal --- */
+/* --- Edit single transaction modal with Regenerate Code for Loan Release --- */
+/* onSaved callback receives optional newCode (string) to let callers reopen updated code group */
 function openEditTransaction(tx, onSaved){
-  // tx: full transaction record object
+  const isLoanRelease = tx.transactionType === 'Loan Release';
   openModal(`
     <div class="modal-close-row">
       <h3 class="modal-title">Edit Transaction</h3>
@@ -1342,7 +1416,7 @@ function openEditTransaction(tx, onSaved){
       </div>
       <div class="field-row">
         <div class="field"><label>Amount</label><input type="text" name="amount" id="editAmount" value="${fmtMoney(tx.amount)}" required></div>
-        <div class="field"><label>Code</label><input type="text" name="code" readonly value="${escapeHtml(tx.code || '')}"></div>
+        <div class="field"><label>Code</label><input type="text" name="code" id="editCode" ${isLoanRelease ? '' : 'readonly'} value="${escapeHtml(tx.code || '')}"></div>
       </div>
       <div class="field-row">
         <div class="field"><label>Category</label><input type="text" name="category" value="${escapeHtml(tx.category || '')}"></div>
@@ -1351,6 +1425,7 @@ function openEditTransaction(tx, onSaved){
       <div class="field"><label>Remarks</label><textarea name="remarks">${escapeHtml(tx.remarks || '')}</textarea></div>
       <div class="modal-actions">
         <button type="button" class="btn btn-danger" id="btnDeleteSingle" style="margin-right:auto">Delete</button>
+        ${isLoanRelease ? '<button type="button" class="btn" id="btnRegenerateCode">Regenerate Code</button>' : ''}
         <button type="button" class="btn" id="mCancel">Cancel</button>
         <button type="submit" class="btn btn-primary">Save</button>
       </div>
@@ -1361,8 +1436,30 @@ function openEditTransaction(tx, onSaved){
   document.getElementById('mCancel').addEventListener('click', closeModal);
 
   const amtEl = document.getElementById('editAmount');
+  const codeEl = document.getElementById('editCode');
   wireMoneyInput(amtEl);
   amtEl.dataset.raw = tx.amount;
+
+  // Regenerate code only for Loan Release: FromAccount-ToAccount-Amount (ensure uniqueness)
+  if (isLoanRelease){
+    document.getElementById('btnRegenerateCode').addEventListener('click', () => {
+      const from = document.querySelector('[name="fromAccount"]').value.trim() || '—';
+      const to = document.querySelector('[name="toAccount"]').value.trim() || '—';
+      const amt = parseMoney(amtEl.value || amtEl.dataset.raw || '0');
+      let base = `${from}-${to}-${amt}`;
+      const existing = new Set(allTx.map(t => t.code));
+      if (!existing.has(base)){
+        codeEl.value = base;
+        toast('Code regenerated');
+        return;
+      }
+      let suffix = 2;
+      let cand = `${base}-${suffix}`;
+      while (existing.has(cand)) { suffix++; cand = `${base}-${suffix}`; }
+      codeEl.value = cand;
+      toast('Code regenerated (unique)');
+    });
+  }
 
   document.getElementById('btnDeleteSingle').addEventListener('click', async () => {
     if (!confirm('Delete this transaction?')) return;
@@ -1370,7 +1467,7 @@ function openEditTransaction(tx, onSaved){
     await reload();
     closeModal();
     toast('Transaction deleted');
-    if (onSaved) await onSaved();
+    if (onSaved) await onSaved(tx.code);
   });
 
   document.getElementById('editTxForm').addEventListener('submit', async (e) => {
@@ -1388,16 +1485,29 @@ function openEditTransaction(tx, onSaved){
       subCategory: form.subCategory.value.trim(),
       remarks: form.remarks.value.trim()
     };
+
+    // If changing code for a Loan Release and payments exist for old code, warn user
+    if (tx.transactionType === 'Loan Release' && updated.code !== (tx.code || '')){
+      const paymentsExist = allTx.some(t => t.transactionType === 'Loan Payment' && t.code === (tx.code || ''));
+      if (paymentsExist){
+        if (!confirm('There are existing Loan Payment lines linked to the current code. Changing the code now will NOT update those payments (they will remain linked to the old code). Continue?')) {
+          return;
+        }
+      }
+    }
+
     await dbPut(updated);
     await reload();
     toast('Transaction updated');
     closeModal();
-    if (onSaved) await onSaved();
+    // Call onSaved with the updated code (so callers can reopen correct group)
+    if (onSaved) await onSaved(updated.code);
+    renderLoan();
   });
 }
 
 /* =============================================================================
-   Loan form, schedule, and detail (unchanged logic except keeping render calls)
+   Loan form, schedule, and detail (kept behavior)
    ============================================================================= */
 function openLoanForm(editing=null){
   const releases = allTx.filter(t => t.transactionType === 'Loan Release');
@@ -1569,59 +1679,7 @@ function dateOptions(defaultVal=1){
   return opts;
 }
 
-/* Loan detail / schedule (unchanged logic) */
-function addMonths(dateStr, n){
-  const d = new Date(dateStr + 'T00:00:00');
-  d.setMonth(d.getMonth() + n);
-  return d;
-}
-function setDay(date, day){
-  const d = new Date(date);
-  const maxDay = new Date(d.getFullYear(), d.getMonth()+1, 0).getDate();
-  d.setDate(Math.min(day, maxDay));
-  return d;
-}
-function iso(d){ return localISO(d); }
-
-function buildSchedule(g, info){
-  const schedule = [];
-  if (info.frequency === 'Flexible'){
-    for (let i=1;i<=info.count;i++) schedule.push({ seq:i, date:'', flexible:true });
-    return schedule;
-  }
-  const anchorStr = info.startPaymentDate || g.date;
-  const anchor = new Date(anchorStr + 'T00:00:00');
-  if (info.frequency === 'Monthly'){
-    const day = parseInt(info.dateSpec) || 1;
-    let offset = 0;
-    let d = setDay(anchor, day);
-    if (d < anchor){ offset = 1; d = setDay(addMonths(anchorStr, 1), day); }
-    for (let i=1;i<=info.count;i++){
-      schedule.push({ seq:i, date: iso(d) });
-      offset++;
-      d = setDay(addMonths(anchorStr, offset), day);
-    }
-    return schedule;
-  }
-  if (info.frequency === 'Semi-Monthly'){
-    const days = info.dateSpec.split(',').map(n => parseInt(n)).filter(Boolean).sort((a,b)=>a-b);
-    if (days.length < 2) days.push(days[0]+15 || 30);
-    let cursorMonth = 0;
-    const candidates = [];
-    while (candidates.length < info.count + days.length){
-      for (const day of days){
-        const d = setDay(addMonths(anchorStr, cursorMonth), day);
-        if (d >= anchor) candidates.push(d);
-      }
-      cursorMonth++;
-    }
-    candidates.sort((a,b) => a-b);
-    candidates.slice(0, info.count).forEach((d,i) => schedule.push({ seq:i+1, date: iso(d) }));
-    return schedule;
-  }
-  return schedule;
-}
-
+/* Loan detail / schedule */
 function openLoanDetail(code){
   const g = loanGroups().find(x => x.code === code);
   if (!g) return;
