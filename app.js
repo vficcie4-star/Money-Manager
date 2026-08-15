@@ -1,6 +1,8 @@
 /* ==========================================================================
    MoneyTracker — app.js
-   (Added Next Payment sort toggle in Loan view; disables drag while sorted)
+   (Added: Wallet Details navigation with Back button;
+    Subcategory transactions view with filters and editable rows;
+    Account modal now shows full transactions with header filters and edit capability)
    ========================================================================== */
 
 /* ---------------------------- IndexedDB layer ---------------------------- */
@@ -555,10 +557,15 @@ function renderReport(){
       <button class="btn btn-primary" id="btnNewGroup">+ New Group</button>
     </div>
     <div class="summary-row">
-      <div class="stat-card" id="walletCard" style="cursor:pointer">
-        <div class="label">Balance Wallet</div>
-        <div class="value">${fmtMoney(wallet)}</div>
-        <div class="hint" style="margin-top:4px">Tap to choose which accounts count</div>
+      <div class="stat-card" id="walletCard" style="cursor:pointer;display:flex;align-items:center;justify-content:space-between">
+        <div>
+          <div class="label">Balance Wallet</div>
+          <div class="value">${fmtMoney(wallet)}</div>
+          <div class="hint" style="margin-top:4px">Tap to choose which accounts count</div>
+        </div>
+        <div style="display:flex;flex-direction:column;gap:6px;margin-left:12px">
+          <button class="btn btn-small" id="btnWalletDetails">Details</button>
+        </div>
       </div>
     </div>
     ${dateFilterHtml}
@@ -575,6 +582,11 @@ function renderReport(){
 
   document.getElementById('btnNewGroup').addEventListener('click', () => openGroupForm(null));
   document.getElementById('walletCard').addEventListener('click', () => openWalletForm(stats));
+  const detailsBtn = document.getElementById('btnWalletDetails');
+  if (detailsBtn) detailsBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    openWalletDetails(stats);
+  });
   document.getElementById('btnApplyDateFilter').addEventListener('click', () => {
     reportFilter.startDate = document.getElementById('reportStartDate').value;
     reportFilter.endDate = document.getElementById('reportEndDate').value;
@@ -600,83 +612,224 @@ function renderReport(){
     e.stopPropagation();
     openGroupForm(Number(b.dataset.editGroup));
   }));
-  main.querySelectorAll('[data-account-row]').forEach(tr => {
-    tr.addEventListener('click', (e) => {
-      if (e.target.closest('[data-edit-group]')) return;
-      const acctCell = tr.querySelector('[data-account]');
-      if (!acctCell) return;
-      const account = acctCell.getAttribute('data-account');
+
+  // Attach account click handlers directly to the account TD so it's reliable
+  main.querySelectorAll('[data-account]').forEach(td => {
+    td.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const account = td.getAttribute('data-account');
+      if (!account) return;
       openAccountModal(account);
     });
   });
 }
 
-function openAccountModal(account){
-  const acctTx = ledgerTx().filter(t => (t.fromAccount === account) || (t.toAccount === account));
-  const start = acctTx.map(t => t.date).filter(Boolean).sort()[0] || earliestDateRecorded();
-  const end = todayStr();
-  const rowsHtml = acctTx.slice().sort((a,b) => (b.date||'').localeCompare(a.date||'')).map(t => `
-    <tr>
-      <td>${fmtDate(t.date)}</td>
-      <td>${escapeHtml(t.transactionType)}</td>
-      <td>${escapeHtml(t.fromAccount || '—')}</td>
-      <td>${escapeHtml(t.toAccount || '—')}</td>
-      <td class="num">${fmtMoney(t.amount)}</td>
-      <td>${escapeHtml(t.category || '')}${t.subCategory? (' / ' + escapeHtml(t.subCategory)) : ''}</td>
-      <td>${escapeHtml(t.remarks || '')}</td>
-    </tr>
-  `).join('') || `<tr class="empty-row"><td colspan="7">No transactions for ${escapeHtml(account)} yet.</td></tr>`;
+/* New: Wallet Details modal with navigation stack and Back button */
+function openWalletDetails(stats){
+  // Build category -> subcategory breakdown and compute income/expense totals
+  const ledger = ledgerTx();
+  const categories = {};
+  ledger.forEach(t => {
+    const cat = t.category || '—';
+    const sub = t.subCategory || '—';
+    if (!categories[cat]) categories[cat] = {};
+    if (!categories[cat][sub]) categories[cat][sub] = { income:0, expense:0 };
+    const amt = Number(t.amount || 0);
+    if (t.transactionType === 'Income') categories[cat][sub].income += amt;
+    else if (t.transactionType === 'Expense') categories[cat][sub].expense += amt;
+  });
 
-  openModal(`
-    <div class="modal-close-row">
-      <h3 class="modal-title">${escapeHtml(account)}</h3>
-      <button class="modal-x" id="mClose">✕</button>
-    </div>
-    <div class="hint" style="margin-bottom:10px">Filter transactions for this account.</div>
-    <div style="display:flex;gap:10px;align-items:center;margin-bottom:12px">
-      <label style="display:flex;align-items:center;gap:6px;color:var(--text-dim)">From:<input type="date" id="acctStart" value="${start}" style="margin-left:6px"></label>
-      <label style="display:flex;align-items:center;gap:6px;color:var(--text-dim)">To:<input type="date" id="acctEnd" value="${end}" style="margin-left:6px"></label>
-      <button class="btn btn-small" id="acctApply">Apply</button>
-    </div>
-    <div class="table-wrap" style="max-height:360px;overflow:auto">
-      <table>
-        <thead><tr><th>Date</th><th>Type</th><th>From</th><th>To</th><th class="num">Amount</th><th>Category</th><th>Remarks</th></tr></thead>
-        <tbody id="acctBody">${rowsHtml}</tbody>
-      </table>
-    </div>
-    <div class="modal-actions" style="margin-top:12px">
-      <button class="btn" id="mClose2">Close</button>
-    </div>
-  `, true);
+  const catList = Object.keys(categories).sort((a,b) => a.localeCompare(b));
 
-  document.getElementById('mClose').addEventListener('click', closeModal);
-  document.getElementById('mClose2').addEventListener('click', closeModal);
+  // Navigation stack: [] -> categories, [cat] -> subcategories, [cat, sub] -> transactions for that sub
+  const stack = [];
 
-  function refreshAccountTable(){
-    const s = document.getElementById('acctStart').value;
-    const e = document.getElementById('acctEnd').value;
-    const filtered = ledgerTx().filter(t => ((t.fromAccount === account) || (t.toAccount === account)) &&
-      (!s || !t.date || t.date >= s) && (!e || !t.date || t.date <= e));
-    const html = filtered.slice().sort((a,b) => (b.date||'').localeCompare(a.date||'')).map(t => `
-      <tr>
-        <td>${fmtDate(t.date)}</td>
-        <td>${escapeHtml(t.transactionType)}</td>
-        <td>${escapeHtml(t.fromAccount || '—')}</td>
-        <td>${escapeHtml(t.toAccount || '—')}</td>
-        <td class="num">${fmtMoney(t.amount)}</td>
-        <td>${escapeHtml(t.category || '')}${t.subCategory? (' / ' + escapeHtml(t.subCategory)) : ''}</td>
-        <td>${escapeHtml(t.remarks || '')}</td>
-      </tr>
-    `).join('') || `<tr class="empty-row"><td colspan="7">No transactions in this range.</td></tr>`;
-    document.getElementById('acctBody').innerHTML = html;
+  function render(){
+    const depth = stack.length;
+    const title = depth === 0 ? 'Wallet Details' : (depth === 1 ? stack[0] : `${stack[0]} / ${stack[1]}`);
+    const backBtn = depth > 0 ? `<button class="btn" id="btnBack">Back</button>` : '';
+    let bodyHtml = '';
+
+    if (depth === 0){
+      // categories list
+      bodyHtml = `
+        <div class="hint" style="margin-bottom:10px">Browse categories and subcategories. Click a category to view its subcategories.</div>
+        <div style="max-height:420px;overflow:auto">
+          <div id="walletDetailsList">
+            ${catList.length ? catList.map(cat => `
+              <div class="field" style="padding:8px 0;border-bottom:1px solid var(--line-soft)">
+                <div style="display:flex;align-items:center;justify-content:space-between;gap:12px">
+                  <div style="font-weight:600;cursor:pointer" data-open-cat="${escapeHtml(cat)}">${escapeHtml(cat)}</div>
+                  <button class="btn btn-small" data-open-cat="${escapeHtml(cat)}">Show subcategories</button>
+                </div>
+              </div>
+            `).join('') : '<div class="hint">No categories yet.</div>'}
+          </div>
+        </div>
+      `;
+    } else if (depth === 1){
+      // subcategories for stack[0]
+      const cat = stack[0];
+      const subs = Object.keys(categories[cat] || {}).sort((a,b)=>a.localeCompare(b));
+      bodyHtml = `
+        <div class="hint" style="margin-bottom:10px">Subcategories for <b>${escapeHtml(cat)}</b>. Click a subcategory to view transactions.</div>
+        <div style="max-height:420px;overflow:auto">
+          ${subs.length ? subs.map(sub => {
+            const inc = categories[cat][sub].income;
+            const exp = categories[cat][sub].expense;
+            const net = inc - exp;
+            return `
+              <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;padding:6px 0;border-bottom:1px solid var(--line-soft)">
+                <div style="display:flex;gap:10px;align-items:center;cursor:pointer" data-open-sub="${escapeHtml(cat)}|${escapeHtml(sub)}">
+                  <div style="font-weight:600">${escapeHtml(sub)}</div>
+                  <div class="hint">${fmtMoney(inc)} / ${fmtMoney(exp)}</div>
+                </div>
+                <div class="hint" style="min-width:120px;text-align:right">${fmtMoney(net)}</div>
+              </div>
+            `;
+          }).join('') : '<div class="hint">No subcategories.</div>'}
+        </div>
+      `;
+    } else {
+      // transactions for cat/sub
+      const cat = stack[0], sub = stack[1];
+      // compute txs
+      let txs = ledgerTx().filter(t => (t.category || '—') === cat && (t.subCategory || '—') === sub);
+      // extract filter options
+      const typeOpts = uniq(txs.map(t => t.transactionType)).sort();
+      const fromOpts = uniq(txs.map(t => t.fromAccount)).filter(Boolean).sort();
+      const toOpts = uniq(txs.map(t => t.toAccount)).filter(Boolean).sort();
+
+      // date filters default
+      const startDefault = earliestDateRecorded();
+      const endDefault = todayStr();
+
+      bodyHtml = `
+        <div class="hint" style="margin-bottom:10px">Transactions for <b>${escapeHtml(cat)}</b> / <b>${escapeHtml(sub)}</b></div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px">
+          <select id="txFilterType"><option value="">All Types</option>${typeOpts.map(t => `<option value="${escapeHtml(t)}">${escapeHtml(t)}</option>`).join('')}</select>
+          <select id="txFilterFrom"><option value="">All From</option>${fromOpts.map(a => `<option value="${escapeHtml(a)}">${escapeHtml(a)}</option>`).join('')}</select>
+          <select id="txFilterTo"><option value="">All To</option>${toOpts.map(a => `<option value="${escapeHtml(a)}">${escapeHtml(a)}</option>`).join('')}</select>
+          <label style="display:flex;align-items:center;gap:6px;color:var(--text-dim)">From:<input type="date" id="txStart" value="${startDefault}" style="margin-left:6px"></label>
+          <label style="display:flex;align-items:center;gap:6px;color:var(--text-dim)">To:<input type="date" id="txEnd" value="${endDefault}" style="margin-left:6px"></label>
+          <button class="btn btn-small" id="btnApplyTxFilter">Apply</button>
+          <button class="btn btn-ghost btn-small" id="btnClearTxFilter">Clear</button>
+        </div>
+        <div class="table-wrap" style="max-height:320px;overflow:auto">
+          <table>
+            <thead><tr><th>Date</th><th>Type</th><th>From</th><th>To</th><th class="num">Amount</th><th>Category</th><th>Remarks</th></tr></thead>
+            <tbody id="walletTxBody"></tbody>
+          </table>
+        </div>
+      `;
+    }
+
+    const html = `
+      <div class="modal-close-row">
+        <div style="display:flex;gap:8px;align-items:center">
+          ${backBtn}
+          <h3 class="modal-title" id="walletModalTitle">${escapeHtml(title)}</h3>
+        </div>
+        <button class="modal-x" id="mClose">✕</button>
+      </div>
+      <div id="walletModalContent">
+        ${bodyHtml}
+      </div>
+      <div class="modal-actions">
+        <button class="btn" id="mClose2">Close</button>
+      </div>
+    `;
+    openModal(html, true);
+
+    document.getElementById('mClose').addEventListener('click', closeModal);
+    document.getElementById('mClose2').addEventListener('click', closeModal);
+    const backEl = document.getElementById('btnBack');
+    if (backEl) backEl.addEventListener('click', () => {
+      stack.pop();
+      render();
+    });
+
+    if (depth === 0){
+      // attach category opens
+      document.querySelectorAll('[data-open-cat]').forEach(el => {
+        el.addEventListener('click', (e) => {
+          const cat = el.dataset.openCat;
+          stack.push(cat);
+          render();
+        });
+      });
+    } else if (depth === 1){
+      // attach open-sub
+      document.querySelectorAll('[data-open-sub]').forEach(el => {
+        el.addEventListener('click', (e) => {
+          const ds = el.dataset.openSub;
+          const parts = ds.split('|');
+          const cat = parts[0];
+          const sub = parts[1];
+          stack.push(sub);
+          render();
+        });
+      });
+    } else {
+      // render transaction rows initially and wire filters
+      function populateTxBody(){
+        let txs = ledgerTx().filter(t => (t.category || '—') === stack[0] && (t.subCategory || '—') === stack[1]);
+        const typeSel = document.getElementById('txFilterType').value;
+        const fromSel = document.getElementById('txFilterFrom').value;
+        const toSel = document.getElementById('txFilterTo').value;
+        const start = document.getElementById('txStart').value;
+        const end = document.getElementById('txEnd').value;
+        if (typeSel) txs = txs.filter(t => t.transactionType === typeSel);
+        if (fromSel) txs = txs.filter(t => t.fromAccount === fromSel);
+        if (toSel) txs = txs.filter(t => t.toAccount === toSel);
+        if (start) txs = txs.filter(t => !t.date || t.date >= start);
+        if (end) txs = txs.filter(t => !t.date || t.date <= end);
+        txs = txs.slice().sort((a,b)=> (b.date||'').localeCompare(a.date||''));
+        const body = txs.map(t => {
+          return `<tr data-id="${t.id}">
+            <td>${fmtDate(t.date)}</td>
+            <td>${escapeHtml(t.transactionType)}</td>
+            <td>${escapeHtml(t.fromAccount || '—')}</td>
+            <td>${escapeHtml(t.toAccount || '—')}</td>
+            <td class="num">${fmtMoney(t.amount)}</td>
+            <td>${escapeHtml(t.category || '')}${t.subCategory ? ' / ' + escapeHtml(t.subCategory) : ''}</td>
+            <td>${escapeHtml(t.remarks || '')}</td>
+          </tr>`;
+        }).join('') || `<tr class="empty-row"><td colspan="7">No transactions match the filters.</td></tr>`;
+        document.getElementById('walletTxBody').innerHTML = body;
+
+        // wire row clicks to edit
+        document.querySelectorAll('#walletTxBody tr[data-id]').forEach(row => {
+          row.addEventListener('click', (e) => {
+            if (e.target.closest('.icon-btn')) return;
+            const id = Number(row.dataset.id);
+            const tx = allTx.find(x => x.id === id);
+            if (!tx) return;
+            openEditTransaction(tx, async () => {
+              await reload();
+              render(); // refresh current view
+            });
+          });
+        });
+      }
+
+      document.getElementById('btnApplyTxFilter').addEventListener('click', populateTxBody);
+      document.getElementById('btnClearTxFilter').addEventListener('click', () => {
+        document.getElementById('txFilterType').value = '';
+        document.getElementById('txFilterFrom').value = '';
+        document.getElementById('txFilterTo').value = '';
+        document.getElementById('txStart').value = earliestDateRecorded();
+        document.getElementById('txEnd').value = todayStr();
+        populateTxBody();
+      });
+      populateTxBody();
+    }
   }
 
-  document.getElementById('acctApply').addEventListener('click', refreshAccountTable);
+  render();
 }
 
-/* =============================================================================
-   Group & Wallet modals
-   ============================================================================= */
+/* Show small details wallet selection (existing) */
 function openWalletForm(stats){
   const names = Object.keys(stats).sort((a,b)=>a.localeCompare(b));
   const selected = walletAccounts === null ? new Set(names) : new Set(walletAccounts);
@@ -720,6 +873,10 @@ function openWalletForm(stats){
   });
 }
 
+/* =============================================================================
+   Group & Wallet (other) modals remain unchanged...
+   (openGroupForm etc. kept as before)
+   ============================================================================= */
 function openGroupForm(groupId){
   const editing = allGroups.find(g => g.id === groupId) || null;
   const stats = accountStats(reportFilter.startDate || reportFilter.startDate || earliestDateRecorded(), reportFilter.endDate || todayStr());
@@ -777,18 +934,33 @@ function openGroupForm(groupId){
 }
 
 /* =============================================================================
-   LEDGER (Income / Expense / Transfer)
+   LEDGER (Income / Expense / Transfer) with enhanced multi-select filters
    ============================================================================= */
 const LEDGER_CFG = {
   Income:   { icon:'＋', cls:'income',   fields:['account','category','subCategory'] },
   Expense:  { icon:'－', cls:'expense',  fields:['account','category','subCategory'] },
   Transfer: { icon:'⇄', cls:'transfer', fields:['fromAccount','toAccount'] }
 };
+/* Filters are arrays for multi-select now */
 const ledgerFilters = {
-  Income:  { account:'', category:'', startDate:'', endDate:'' },
-  Expense: { account:'', category:'', startDate:'', endDate:'' },
-  Transfer: { startDate:'', endDate:'' }
+  Income:  { accounts:[], categories:[], startDate:'', endDate:'' },
+  Expense: { accounts:[], categories:[], startDate:'', endDate:'' },
+  Transfer: { fromAccounts:[], toAccounts:[], startDate:'', endDate:'' }
 };
+
+function matchesAny(value, arr){
+  if (!arr || !arr.length) return true;
+  return arr.includes(value);
+}
+function filterRowsByDate(rows, start, end){
+  if (!start && !end) return rows;
+  return rows.filter(t => {
+    if (!t.date) return true;
+    if (start && t.date < start) return false;
+    if (end && t.date > end) return false;
+    return true;
+  });
+}
 
 function renderLedger(type){
   const cfg = LEDGER_CFG[type];
@@ -798,35 +970,45 @@ function renderLedger(type){
   const startDefault = filter.startDate || earliestDateRecorded();
   const endDefault = filter.endDate || todayStr();
 
-  let rows = allRows;
-  if (filter.startDate || filter.endDate){
+  // Apply date filter first for option computation
+  let rows = filterRowsByDate(allRows, filter.startDate || startDefault, filter.endDate || endDefault);
+
+  // When linked filters are present, we compute available options depending on selections
+  if (!isTransfer){
+    // Account <-> Category are linked and multi-selectable
+    // Compute account options (based on currently selected categories if any)
+    const accountOptionsSet = new Set();
+    rows.forEach(t => {
+      const acct = type === 'Income' ? t.toAccount : t.fromAccount;
+      if (!filter.categories.length || filter.categories.includes(t.category)) accountOptionsSet.add(acct);
+    });
+    const accountOpts = Array.from(accountOptionsSet).filter(Boolean).sort((a,b)=>a.localeCompare(b));
+
+    // Compute category options (based on currently selected accounts if any)
+    const catOptionsSet = new Set();
+    rows.forEach(t => {
+      const acct = type === 'Income' ? t.toAccount : t.fromAccount;
+      if (!filter.accounts.length || filter.accounts.includes(acct)) catOptionsSet.add(t.category || '');
+    });
+    const catOpts = Array.from(catOptionsSet).filter(Boolean).sort((a,b)=>a.localeCompare(b));
+
+    // Now apply both filters to get displayed rows
     rows = rows.filter(t => {
-      if (!t.date) return true;
-      if (filter.startDate && t.date < filter.startDate) return false;
-      if (filter.endDate && t.date > filter.endDate) return false;
-      return true;
+      const acct = type === 'Income' ? t.toAccount : t.fromAccount;
+      const cat = t.category || '';
+      return matchesAny(acct, filter.accounts) && matchesAny(cat, filter.categories);
     });
-  }
-  if (!isTransfer && filter){
-    if (filter.account) rows = rows.filter(t => (type==='Income'?t.toAccount:t.fromAccount) === filter.account);
-    if (filter.category) rows = rows.filter(t => t.category === filter.category);
-  }
-  rows = rows.slice().sort((a,b) => (b.date||'').localeCompare(a.date||''));
-  const main = document.getElementById('main');
 
-  let filterHtml = '';
-  if (!isTransfer){
-    const accountOpts = uniq(allRows.map(t => type==='Income'?t.toAccount:t.fromAccount)).sort((a,b)=>a.localeCompare(b));
-    const catOpts = uniq(allRows.map(t => t.category)).sort((a,b)=>a.localeCompare(b));
-    filterHtml = `
+    rows = rows.slice().sort((a,b) => (b.date||'').localeCompare(a.date||''));
+    const main = document.getElementById('main');
+
+    const filterHtml = `
       <div class="filter-row">
-        <select id="filterAccount">
-          <option value="">All Accounts</option>
-          ${accountOpts.map(a => `<option value="${escapeHtml(a)}" ${filter.account===a?'selected':''}>${escapeHtml(a)}</option>`).join('')}
+        <select id="filterAccount" multiple size="4" style="min-width:160px">
+          ${accountOpts.length ? accountOpts.map(a => `<option value="${escapeHtml(a)}" ${filter.accounts.includes(a)?'selected':''}>${escapeHtml(a)}</option>`).join('') : '<option value="">(No accounts)</option>'}
         </select>
-        <select id="filterCategory">
-          <option value="">All Categories</option>
-          ${catOpts.map(c => `<option value="${escapeHtml(c)}" ${filter.category===c?'selected':''}>${escapeHtml(c)}</option>`).join('')}
+        <select id="filterCategory" multiple size="4" style="min-width:160px">
+          ${catOpts.length ? catOpts.map(c => `<option value="${escapeHtml(c)}" ${filter.categories.includes(c)?'selected':''}>${escapeHtml(c)}</option>`).join('') : '<option value="">(No categories)</option>'}
         </select>
         <label style="display:flex;align-items:center;gap:6px;color:var(--text-dim)">
           From: <input type="date" id="ledgerStart" value="${filter.startDate || startDefault}" style="margin-left:6px">
@@ -834,83 +1016,189 @@ function renderLedger(type){
         <label style="display:flex;align-items:center;gap:6px;color:var(--text-dim)">
           To: <input type="date" id="ledgerEnd" value="${filter.endDate || endDefault}" style="margin-left:6px">
         </label>
-        <button class="btn btn-small" id="btnApplyLedgerDate">Apply</button>
-        ${(filter.account||filter.category) ? `<button type="button" class="btn btn-ghost btn-small" id="btnClearFilter">Clear filter</button>` : ''}
+        <div style="display:flex;flex-direction:column;gap:8px">
+          <button class="btn btn-small" id="btnApplyLedgerDate">Apply</button>
+          <button type="button" class="btn btn-ghost btn-small" id="btnClearFilter">Clear</button>
+        </div>
       </div>
     `;
+
+    main.innerHTML = `
+      <div class="view-header">
+        <div><h1 class="view-title">${type}</h1><div class="view-sub">${rows.length} transaction${rows.length===1?'':'s'}</div></div>
+        <button class="btn btn-primary ${cfg.cls}" id="btnAdd">+ Add ${type}</button>
+      </div>
+      ${filterHtml}
+      <div class="table-wrap">
+        <table>
+          <thead><tr>
+            <th>Date</th>
+            <th>Account</th><th>Category</th><th>SubCategory</th>
+            <th class="num">Amount</th><th>Remarks</th><th></th>
+          </tr></thead>
+          <tbody id="ledgerBody">
+            ${rows.length ? rows.map(t => `
+              <tr data-id="${t.id}">
+                <td>${fmtDate(t.date)}</td>
+                <td>${escapeHtml((type==='Income' ? t.toAccount : t.fromAccount) || '—')}</td><td>${escapeHtml(t.category||'—')}</td><td>${escapeHtml(t.subCategory||'—')}</td>
+                <td class="num">${fmtMoney(t.amount)}</td>
+                <td>${escapeHtml(t.remarks||'')}</td>
+                <td class="row-actions"><button class="icon-btn" data-del="${t.id}" title="Delete">✕</button></td>
+              </tr>
+            `).join('') : `<tr class="empty-row"><td colspan="7">No ${type.toLowerCase()} transactions match this filter yet.</td></tr>`}
+          </tbody>
+        </table>
+      </div>
+    `;
+    document.getElementById('btnAdd').addEventListener('click', () => openLedgerForm(type));
+    document.getElementById('btnApplyLedgerDate').addEventListener('click', () => {
+      ledgerFilters[type].startDate = document.getElementById('ledgerStart').value;
+      ledgerFilters[type].endDate = document.getElementById('ledgerEnd').value;
+      renderLedger(type);
+    });
+    // account multi-select change
+    document.getElementById('filterAccount').addEventListener('change', (e) => {
+      const sel = Array.from(e.target.selectedOptions).map(o => o.value);
+      ledgerFilters[type].accounts = sel;
+      renderLedger(type);
+    });
+    // category multi-select change
+    document.getElementById('filterCategory').addEventListener('change', (e) => {
+      const sel = Array.from(e.target.selectedOptions).map(o => o.value);
+      ledgerFilters[type].categories = sel;
+      renderLedger(type);
+    });
+    document.getElementById('btnClearFilter').addEventListener('click', () => {
+      ledgerFilters[type].accounts = [];
+      ledgerFilters[type].categories = [];
+      ledgerFilters[type].startDate = '';
+      ledgerFilters[type].endDate = '';
+      renderLedger(type);
+    });
+
+    main.querySelectorAll('#ledgerBody tr[data-id]').forEach(tr => {
+      tr.addEventListener('click', (e) => {
+        if (e.target.closest('[data-del]')) return;
+        const rec = allTx.find(t => t.id === Number(tr.dataset.id));
+        if (rec) openLedgerForm(type, rec);
+      });
+    });
+    main.querySelectorAll('[data-del]').forEach(b => b.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      if (!confirm('Delete this transaction?')) return;
+      await dbDeleteIds([Number(b.dataset.del)]);
+      await reload();
+      renderLedger(type);
+    }));
+    return;
   } else {
-    filterHtml = `
+    // Transfer: linked fromAccounts <-> toAccounts
+    const fromSet = new Set();
+    const toSet = new Set();
+    rows.forEach(t => {
+      if (!filter.toAccounts.length || filter.toAccounts.includes(t.toAccount)) fromSet.add(t.fromAccount);
+      if (!filter.fromAccounts.length || filter.fromAccounts.includes(t.fromAccount)) toSet.add(t.toAccount);
+    });
+    const fromOpts = Array.from(fromSet).filter(Boolean).sort((a,b)=>a.localeCompare(b));
+    const toOpts = Array.from(toSet).filter(Boolean).sort((a,b)=>a.localeCompare(b));
+
+    // apply both filters
+    rows = rows.filter(t => matchesAny(t.fromAccount, filter.fromAccounts) && matchesAny(t.toAccount, filter.toAccounts));
+
+    rows = rows.slice().sort((a,b) => (b.date||'').localeCompare(a.date||''));
+    const main = document.getElementById('main');
+
+    const filterHtml = `
       <div class="filter-row">
+        <select id="filterFromAccount" multiple size="4" style="min-width:160px">
+          ${fromOpts.length ? fromOpts.map(a => `<option value="${escapeHtml(a)}" ${filter.fromAccounts.includes(a)?'selected':''}>${escapeHtml(a)}</option>`).join('') : '<option value="">(No from accounts)</option>'}
+        </select>
+        <select id="filterToAccount" multiple size="4" style="min-width:160px">
+          ${toOpts.length ? toOpts.map(a => `<option value="${escapeHtml(a)}" ${filter.toAccounts.includes(a)?'selected':''}>${escapeHtml(a)}</option>`).join('') : '<option value="">(No to accounts)</option>'}
+        </select>
         <label style="display:flex;align-items:center;gap:6px;color:var(--text-dim)">
           From: <input type="date" id="ledgerStart" value="${filter.startDate || startDefault}" style="margin-left:6px">
         </label>
         <label style="display:flex;align-items:center;gap:6px;color:var(--text-dim)">
           To: <input type="date" id="ledgerEnd" value="${filter.endDate || endDefault}" style="margin-left:6px">
         </label>
-        <button class="btn btn-small" id="btnApplyLedgerDate">Apply</button>
+        <div style="display:flex;flex-direction:column;gap:8px">
+          <button class="btn btn-small" id="btnApplyLedgerDate">Apply</button>
+          <button type="button" class="btn btn-ghost btn-small" id="btnClearFilter">Clear</button>
+        </div>
       </div>
     `;
-  }
 
-  main.innerHTML = `
-    <div class="view-header">
-      <div><h1 class="view-title">${type}</h1><div class="view-sub">${rows.length} transaction${rows.length===1?'':'s'}</div></div>
-      <button class="btn btn-primary ${cfg.cls}" id="btnAdd">+ Add ${type}</button>
-    </div>
-    ${filterHtml}
-    <div class="table-wrap">
-      <table>
-        <thead><tr>
-          <th>Date</th>
-          ${isTransfer ? '<th>From Account</th><th>To Account</th>' : '<th>Account</th><th>Category</th><th>SubCategory</th>'}
-          <th class="num">Amount</th><th>Remarks</th><th></th>
-        </tr></thead>
-        <tbody id="ledgerBody">
-          ${rows.length ? rows.map(t => `
-            <tr data-id="${t.id}">
-              <td>${fmtDate(t.date)}</td>
-              ${isTransfer
-                ? `<td>${escapeHtml(t.fromAccount||'—')}</td><td>${escapeHtml(t.toAccount||'—')}</td>`
-                : `<td>${escapeHtml((type==='Income' ? t.toAccount : t.fromAccount) || '—')}</td><td>${escapeHtml(t.category||'—')}</td><td>${escapeHtml(t.subCategory||'—')}</td>`}
-              <td class="num">${fmtMoney(t.amount)}</td>
-              <td>${escapeHtml(t.remarks||'')}</td>
-              <td class="row-actions"><button class="icon-btn" data-del="${t.id}" title="Delete">✕</button></td>
-            </tr>
-          `).join('') : `<tr class="empty-row"><td colspan="${isTransfer?6:7}">No ${type.toLowerCase()} transactions${(filter&&(filter.account||filter.category))?' match this filter':' yet'}.</td></tr>`}
-        </tbody>
-      </table>
-    </div>
-  `;
-  document.getElementById('btnAdd').addEventListener('click', () => openLedgerForm(type));
-  document.getElementById('btnApplyLedgerDate').addEventListener('click', () => {
-    ledgerFilters[type].startDate = document.getElementById('ledgerStart').value;
-    ledgerFilters[type].endDate = document.getElementById('ledgerEnd').value;
-    renderLedger(type);
-  });
-
-  if (!isTransfer){
-    document.getElementById('filterAccount').addEventListener('change', (e) => { filter.account = e.target.value; renderLedger(type); });
-    document.getElementById('filterCategory').addEventListener('change', (e) => { filter.category = e.target.value; renderLedger(type); });
-    const clearBtn = document.getElementById('btnClearFilter');
-    if (clearBtn) clearBtn.addEventListener('click', () => { filter.account=''; filter.category=''; renderLedger(type); });
-  }
-  main.querySelectorAll('#ledgerBody tr[data-id]').forEach(tr => {
-    tr.addEventListener('click', (e) => {
-      if (e.target.closest('[data-del]')) return;
-      const rec = allTx.find(t => t.id === Number(tr.dataset.id));
-      if (rec) openLedgerForm(type, rec);
+    main.innerHTML = `
+      <div class="view-header">
+        <div><h1 class="view-title">${type}</h1><div class="view-sub">${rows.length} transaction${rows.length===1?'':'s'}</div></div>
+        <button class="btn btn-primary ${cfg.cls}" id="btnAdd">+ Add ${type}</button>
+      </div>
+      ${filterHtml}
+      <div class="table-wrap">
+        <table>
+          <thead><tr>
+            <th>Date</th>
+            <th>From Account</th><th>To Account</th>
+            <th class="num">Amount</th><th>Remarks</th><th></th>
+          </tr></thead>
+          <tbody id="ledgerBody">
+            ${rows.length ? rows.map(t => `
+              <tr data-id="${t.id}">
+                <td>${fmtDate(t.date)}</td>
+                <td>${escapeHtml(t.fromAccount||'—')}</td><td>${escapeHtml(t.toAccount||'—')}</td>
+                <td class="num">${fmtMoney(t.amount)}</td>
+                <td>${escapeHtml(t.remarks||'')}</td>
+                <td class="row-actions"><button class="icon-btn" data-del="${t.id}" title="Delete">✕</button></td>
+              </tr>
+            `).join('') : `<tr class="empty-row"><td colspan="6">No transfers match this filter yet.</td></tr>`}
+          </tbody>
+        </table>
+      </div>
+    `;
+    document.getElementById('btnAdd').addEventListener('click', () => openLedgerForm(type));
+    document.getElementById('btnApplyLedgerDate').addEventListener('click', () => {
+      ledgerFilters[type].startDate = document.getElementById('ledgerStart').value;
+      ledgerFilters[type].endDate = document.getElementById('ledgerEnd').value;
+      renderLedger(type);
     });
-  });
-  main.querySelectorAll('[data-del]').forEach(b => b.addEventListener('click', async (e) => {
-    e.stopPropagation();
-    if (!confirm('Delete this transaction?')) return;
-    await dbDeleteIds([Number(b.dataset.del)]);
-    await reload();
-    renderLedger(type);
-  }));
+    document.getElementById('filterFromAccount').addEventListener('change', (e) => {
+      const sel = Array.from(e.target.selectedOptions).map(o => o.value);
+      ledgerFilters[type].fromAccounts = sel;
+      renderLedger(type);
+    });
+    document.getElementById('filterToAccount').addEventListener('change', (e) => {
+      const sel = Array.from(e.target.selectedOptions).map(o => o.value);
+      ledgerFilters[type].toAccounts = sel;
+      renderLedger(type);
+    });
+    document.getElementById('btnClearFilter').addEventListener('click', () => {
+      ledgerFilters[type].fromAccounts = [];
+      ledgerFilters[type].toAccounts = [];
+      ledgerFilters[type].startDate = '';
+      ledgerFilters[type].endDate = '';
+      renderLedger(type);
+    });
+
+    main.querySelectorAll('#ledgerBody tr[data-id]').forEach(tr => {
+      tr.addEventListener('click', (e) => {
+        if (e.target.closest('[data-del]')) return;
+        const rec = allTx.find(t => t.id === Number(tr.dataset.id));
+        if (rec) openLedgerForm(type, rec);
+      });
+    });
+    main.querySelectorAll('[data-del]').forEach(b => b.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      if (!confirm('Delete this transaction?')) return;
+      await dbDeleteIds([Number(b.dataset.del)]);
+      await reload();
+      renderLedger(type);
+    }));
+    return;
+  }
 }
 
-/* SubCategory suggestions filtered by Category */
+/* SubCategory suggestions filtered by Category (unchanged) */
 function openLedgerForm(type, editing=null){
   const cfg = LEDGER_CFG[type];
   const accountSuggestions = suggestAccounts();
@@ -1034,7 +1322,7 @@ function openLedgerForm(type, editing=null){
 }
 
 /* =============================================================================
-   LOAN helpers + view updates (Next Payment calculation included)
+   LOAN helpers + view updates (unchanged from prior)
    ============================================================================= */
 function loanGroups(){
   const releases = allTx.filter(t => t.transactionType === 'Loan Release');
@@ -1179,9 +1467,7 @@ async function moveLoanCode(draggedCode, targetCode) {
   renderLoan();
 }
 
-/* Render Loan view with new column order and Next Payment sort toggle:
-   #, Debtor, Next Payment, Repayment Amount, Account, Payment Count, Balance, Amount, Code
-*/
+/* Render Loan view (unchanged ordering from prior) */
 function renderLoan(){
   const groupsAll = loanGroups();
   let orderedCodes;
@@ -1238,9 +1524,9 @@ function renderLoan(){
     <div class="table-wrap">
       <table>
         <thead><tr>
-          <th></th><th>#</th><th>Debtor</th>
+          <th></th><th>#</th>
           <th>Next Payment <button id="btnToggleNextSort" class="icon-btn" title="${loanNextSort === 'asc' ? 'Showing oldest first — click to restore original' : 'Sort by next payment (oldest first)'}">${loanNextSort === 'asc' ? '↑' : '⇅'}</button></th>
-          <th class="num">Repayment Amount</th><th>Account</th><th>Payment Count</th><th class="num">Balance</th><th class="num">Amount</th><th>Code</th><th></th>
+          <th class="num">Repayment Amount</th><th>Account</th><th>Payment Count</th><th class="num">Balance</th><th class="num">Amount</th><th>Debtor</th><th style="font-family:var(--font-mono)">Code</th><th></th>
         </tr></thead>
         <tbody id="loanBody">
           ${displayGroups.length ? displayGroups.map((g,i) => {
@@ -1253,13 +1539,13 @@ function renderLoan(){
             <tr data-code="${escapeHtml(g.code)}" ${draggableAttr}>
               <td style="width:32px;text-align:center"><span class="drag-handle" style="cursor:grab;user-select:none;font-size:16px;padding:4px 6px;display:inline-block">☰</span></td>
               <td>${i+1}</td>
-              <td>${escapeHtml(g.debtor)}</td>
               <td>${nextPaymentDate ? fmtDate(nextPaymentDate) : '—'}</td>
               <td class="num">${fmtMoney(info.repaymentAmount)}</td>
               <td>${escapeHtml(g.account)}</td>
               <td>${paidCount} of ${info.count || 0}</td>
               <td class="num">${fmtMoney(loanBalance(g.code))}</td>
               <td class="num">${fmtMoney(g.principal)}</td>
+              <td>${escapeHtml(g.debtor)}</td>
               <td style="font-family:var(--font-mono)">${escapeHtml(g.code)}</td>
               <td class="row-actions">
                 <button class="icon-btn" data-edit="${escapeHtml(g.code)}" title="Edit loan">✎</button>
@@ -1360,7 +1646,7 @@ function renderLoan(){
   });
 }
 
-/* --- Transactions modal + edit/delete per-line --- */
+/* --- Transactions modal + edit/delete per-line (unchanged) --- */
 function openLoanTransactions(code){
   const txs = allTx.filter(t => t.code === code).slice().sort((a,b) => ((a.date||'') + String(a.id)).localeCompare((b.date||'') + String(b.id)));
   const rowsHtml = txs.map(t => `
@@ -1534,297 +1820,123 @@ function openEditTransaction(tx, onSaved){
 }
 
 /* =============================================================================
-   Loan form, schedule, and detail (kept behavior)
+   Account modal (clicked from Report) — shows transactions with header filters and editable rows
    ============================================================================= */
-function openLoanForm(editing=null){
-  const releases = allTx.filter(t => t.transactionType === 'Loan Release');
-  const debtors = uniq(releases.map(t => t.toAccount));
-  const accounts = uniq(releases.map(t => t.fromAccount));
-  const info = editing ? parseLoanRemarks(editing.remarksRaw) : null;
+function openAccountModal(account){
+  // initial defaults
+  let start = earliestDateRecorded();
+  let end = todayStr();
+  let typeFilter = ''; // '' or Income/Expense/Transfer
+  let fromFilter = ''; // when relevant
+  let toFilter = '';
+  let categoryFilter = '';
 
-  openModal(`
-    <div class="modal-close-row">
-      <h3 class="modal-title">${editing ? 'Edit Loan' : 'Add Loan'}</h3>
-      <button class="modal-x" id="mClose">✕</button>
-    </div>
-    <form id="loanForm">
-      <div class="field-row">
-        <div class="field"><label>Date Released</label><input type="date" name="date" value="${editing?editing.date:todayStr()}" required></div>
-        <div class="field">
-          <label>Code${editing?'':' (auto)'}</label>
-          <input type="text" id="codePreview" readonly style="background:#F1EFE6;color:#8A6A2A;font-family:var(--font-mono);" value="${editing?escapeHtml(editing.code):''}">
-        </div>
-      </div>
-      <div class="field-row">
-        <div class="field">
-          <label>Debtor</label>
-          <input type="text" name="debtor" id="fDebtor" autocomplete="off" value="${editing?escapeHtml(editing.debtor):''}" required>
-          <div class="autocomplete-list" id="acDebtor"></div>
-        </div>
-        <div class="field">
-          <label>Account</label>
-          <input type="text" name="account" id="fAccount" autocomplete="off" value="${editing?escapeHtml(editing.account):''}" required>
-          <div class="autocomplete-list" id="acAccount"></div>
-        </div>
-      </div>
-      <div class="field-row">
-        <div class="field"><label>Amount</label><input type="text" name="amount" id="fAmount" placeholder="0.00" value="${editing?fmtMoney(editing.principal):''}" required></div>
-        <div class="field"><label>Fees</label><input type="text" name="fees" id="fFees" placeholder="0.00" value="${editing?fmtMoney(editing.fees):''}"></div>
-        <div class="field"><label>Interest</label><input type="text" name="interest" id="fInterest" placeholder="0.00" value="${editing?fmtMoney(editing.interest):''}"></div>
-      </div>
-      <div class="field-row">
-        <div class="field"><label>Monthly Interest Rate (%)</label><input type="text" name="interestRate" placeholder="e.g. 5" value="${editing?escapeHtml(info.interestRate):''}"></div>
-        <div class="field"><label>Repayment Amount</label><input type="text" name="repaymentAmount" placeholder="0.00" value="${editing?fmtMoney(info.repaymentAmount):''}" required></div>
-      </div>
-      <div class="field">
-        <label>Repayment Frequency</label>
-        <div class="radio-group" id="freqGroup">
-          <button type="button" class="radio-chip${(!editing||info.frequency==='Monthly')?' active':''}" data-freq="Monthly">Monthly</button>
-          <button type="button" class="radio-chip${(editing&&info.frequency==='Semi-Monthly')?' active':''}" data-freq="Semi-Monthly">Semi-Monthly</button>
-          <button type="button" class="radio-chip${(editing&&info.frequency==='Flexible')?' active':''}" data-freq="Flexible">Flexible</button>
-        </div>
-        <input type="hidden" name="frequency" value="${editing?info.frequency:'Monthly'}">
-      </div>
-      <div class="field-row">
-        <div class="field"><label>Repayment Count</label><input type="number" name="repaymentCount" min="1" value="${editing?info.count:''}" required></div>
-        <div class="field"><label>Start Payment Date</label><input type="date" name="startPaymentDate" value="${editing?(info.startPaymentDate||editing.date):todayStr()}"></div>
-      </div>
-      <div class="field-row">
-        <div class="field" id="dateField1"><label>Repayment Date</label>
-          <select name="repayDate1">${dateOptions(editing && info.frequency!=='Flexible' ? (parseInt(info.dateSpec.split(',')[0])||1) : 1)}</select>
-        </div>
-        <div class="field" id="dateField2" style="display:none"><label>2nd Repayment Date</label>
-          <select name="repayDate2">${dateOptions(editing && info.frequency==='Semi-Monthly' ? (parseInt(info.dateSpec.split(',')[1])||15) : 15)}</select>
-        </div>
-      </div>
-      <div class="field"><label>Remarks</label><textarea name="remarks">${editing?escapeHtml(info.userRemarks):''}</textarea></div>
-      <div class="modal-actions">
-        <button type="button" class="btn" id="mCancel">Cancel</button>
-        <button type="submit" class="btn btn-primary loan">Save Loan</button>
-      </div>
-    </form>
-  `, true);
-
-  const form = document.getElementById('loanForm');
-  wireMoneyInput(document.getElementById('fAmount'));
-  wireMoneyInput(document.getElementById('fFees'));
-  wireMoneyInput(document.getElementById('fInterest'));
-  wireMoneyInput(form.repaymentAmount);
-  if (editing){
-    document.getElementById('fAmount').dataset.raw = editing.principal;
-    document.getElementById('fFees').dataset.raw = editing.fees;
-    document.getElementById('fInterest').dataset.raw = editing.interest;
-    form.repaymentAmount.dataset.raw = info.repaymentAmount;
-  }
-
-  attachAutocomplete(document.getElementById('fDebtor'), document.getElementById('acDebtor'), () => debtors);
-  attachAutocomplete(document.getElementById('fAccount'), document.getElementById('acAccount'), () => accounts);
-
-  function updateCodePreview(){
-    if (editing) return;
-    const d = document.getElementById('fDebtor').value.trim() || '—';
-    const a = document.getElementById('fAccount').value.trim() || '—';
-    const amt = document.getElementById('fAmount').dataset.raw || document.getElementById('fAmount').value || '0';
-    document.getElementById('codePreview').value = `${a}-${d}-${amt}`;
-  }
-  ['input','change','blur'].forEach(ev => {
-    document.getElementById('fDebtor').addEventListener(ev, updateCodePreview);
-    document.getElementById('fAccount').addEventListener(ev, updateCodePreview);
-    document.getElementById('fAmount').addEventListener(ev, updateCodePreview);
-  });
-
-  let freq = editing ? info.frequency : 'Monthly';
-  document.getElementById('dateField1').style.display = freq === 'Flexible' ? 'none' : '';
-  document.getElementById('dateField2').style.display = freq === 'Semi-Monthly' ? '' : 'none';
-  document.querySelectorAll('#freqGroup .radio-chip').forEach(chip => {
-    chip.addEventListener('click', () => {
-      document.querySelectorAll('#freqGroup .radio-chip').forEach(c => c.classList.remove('active'));
-      chip.classList.add('active');
-      freq = chip.dataset.freq;
-      form.frequency.value = freq;
-      document.getElementById('dateField1').style.display = freq === 'Flexible' ? 'none' : '';
-      document.getElementById('dateField2').style.display = freq === 'Semi-Monthly' ? '' : 'none';
+  function render(){
+    // gather transactions related to this account (all ledger types)
+    const all = ledgerTx().filter(t => t.fromAccount === account || t.toAccount === account);
+    // compute options for header filters based on current date selection
+    const filteredByDate = all.filter(t => {
+      if (!t.date) return true;
+      if (start && t.date < start) return false;
+      if (end && t.date > end) return false;
+      return true;
     });
-  });
+    const typeOpts = uniq(filteredByDate.map(t => t.transactionType)).sort();
+    const fromOpts = uniq(filteredByDate.map(t => t.fromAccount)).filter(Boolean).sort();
+    const toOpts = uniq(filteredByDate.map(t => t.toAccount)).filter(Boolean).sort();
+    const catOpts = uniq(filteredByDate.map(t => t.category)).filter(Boolean).sort();
 
-  document.getElementById('mClose').addEventListener('click', closeModal);
-  document.getElementById('mCancel').addEventListener('click', closeModal);
-
-  form.addEventListener('submit', async (e) => {
-    e.preventDefault();
-    const debtor = form.debtor.value.trim();
-    const account = form.account.value.trim();
-    const amount = moneyVal(document.getElementById('fAmount'));
-    const fees = moneyVal(document.getElementById('fFees'));
-    const interest = moneyVal(document.getElementById('fInterest'));
-    const repaymentAmount = moneyVal(form.repaymentAmount);
-    const interestRate = form.interestRate.value.trim();
-    const repaymentCount = form.repaymentCount.value.trim();
-    const startPaymentDate = form.startPaymentDate.value || form.date.value;
-
-    let dateSpec = '';
-    if (freq === 'Monthly') dateSpec = form.repayDate1.value;
-    else if (freq === 'Semi-Monthly') dateSpec = `${form.repayDate1.value},${form.repayDate2.value}`;
-
-    let code;
-    if (editing){
-      code = editing.code;
-    } else {
-      code = `${account}-${debtor}-${amount}`;
-      let suffix = 1;
-      const existingCodes = new Set(allTx.map(t => t.code));
-      let candidate = code;
-      while (existingCodes.has(candidate)){ suffix++; candidate = `${code}-${suffix}`; }
-      code = candidate;
-    }
-
-    const combinedRemarks = [interestRate, repaymentAmount, freq, repaymentCount, dateSpec, startPaymentDate, form.remarks.value.trim()].join('|');
-
-    const records = [
-      { date: form.date.value, transactionType:'Loan Release', fromAccount:account, toAccount:debtor,
-        code, amount: amount - fees, category:'Net Amount', subCategory:'', remarks: combinedRemarks },
-      { date: form.date.value, transactionType:'Loan Release', fromAccount:account, toAccount:debtor,
-        code, amount: fees, category:'Fees', subCategory:'', remarks:'' },
-      { date: form.date.value, transactionType:'Loan Release', fromAccount:account, toAccount:debtor,
-        code, amount: interest, category:'Interest', subCategory:'', remarks:'' }
-    ];
-
-    if (editing){
-      const oldIds = allTx.filter(t => t.transactionType==='Loan Release' && t.code === editing.code).map(t=>t.id);
-      await dbDeleteIds(oldIds);
-    }
-    await dbAddMany(records);
-    await reload();
-    closeModal();
-    toast(editing ? 'Loan updated' : 'Loan saved');
-    renderLoan();
-  });
-}
-function dateOptions(defaultVal=1){
-  let opts = '';
-  for (let i=1;i<=30;i++) opts += `<option value="${i}" ${i===defaultVal?'selected':''}>${i}</option>`;
-  return opts;
-}
-
-/* Loan detail / schedule */
-function openLoanDetail(code){
-  const g = loanGroups().find(x => x.code === code);
-  if (!g) return;
-  const info = parseLoanRemarks(g.remarksRaw);
-  const schedule = buildSchedule(g, info);
-  const payments = allTx.filter(t => t.transactionType === 'Loan Payment' && t.code === code);
-  const total = g.principal + g.interest;
-  const paid = loanPaid(code);
-  const balance = total - paid;
-
-  function findPaidRow(date){
-    return payments.filter(p => p.date === date);
-  }
-
-  const rowsHtml = schedule.map(row => {
-    const paidLines = row.date ? findPaidRow(row.date) : [];
-    const isPaid = paidLines.some(p => p.category === 'Payment');
-    const addAmt = paidLines.find(p => p.category === 'Additional Payment');
-    return `
-      <div class="schedule-row ${isPaid?'paid':''}" data-seq="${row.seq}" data-date="${row.date}">
-        <span class="seq">${row.seq}</span>
-        ${row.flexible
-          ? `<input type="date" class="sdate-input" style="width:130px" value="${row.date||''}" ${isPaid?'disabled':''}>`
-          : `<span class="sdate">${fmtDate(row.date)}</span>`}
-        <span class="samt">${fmtMoney(info.repaymentAmount)}</span>
-        <span class="sadd"><input type="text" placeholder="Additional" value="${addAmt?fmtMoney(addAmt.amount):''}" ${isPaid?'disabled':''}></span>
-        <label style="display:flex;align-items:center;gap:5px;font-size:12px;color:var(--text-dim)">
-          <input type="checkbox" class="paidbox" ${isPaid?'checked':''}> Paid
-        </label>
+    // build html
+    const html = `
+      <div class="modal-close-row">
+        <h3 class="modal-title">${escapeHtml(account)}</h3>
+        <button class="modal-x" id="mClose">✕</button>
+      </div>
+      <div class="hint" style="margin-bottom:10px">Filter transactions for this account. Click a row to edit it.</div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px">
+        <select id="accFilterType"><option value="">All Types</option>${typeOpts.map(t => `<option value="${escapeHtml(t)}" ${typeFilter===t?'selected':''}>${escapeHtml(t)}</option>`).join('')}</select>
+        <select id="accFilterFrom"><option value="">All From</option>${fromOpts.map(a => `<option value="${escapeHtml(a)}" ${fromFilter===a?'selected':''}>${escapeHtml(a)}</option>`).join('')}</select>
+        <select id="accFilterTo"><option value="">All To</option>${toOpts.map(a => `<option value="${escapeHtml(a)}" ${toFilter===a?'selected':''}>${escapeHtml(a)}</option>`).join('')}</select>
+        <select id="accFilterCategory"><option value="">All Categories</option>${catOpts.map(c => `<option value="${escapeHtml(c)}" ${categoryFilter===c?'selected':''}>${escapeHtml(c)}</option>`).join('')}</select>
+        <label style="display:flex;align-items:center;gap:6px;color:var(--text-dim)">From:<input type="date" id="acctStart" value="${start}" style="margin-left:6px"></label>
+        <label style="display:flex;align-items:center;gap:6px;color:var(--text-dim)">To:<input type="date" id="acctEnd" value="${end}" style="margin-left:6px"></label>
+        <div style="display:flex;flex-direction:column;gap:8px">
+          <button class="btn btn-small" id="acctApply">Apply</button>
+          <button class="btn btn-ghost btn-small" id="acctClear">Clear</button>
+        </div>
+      </div>
+      <div class="table-wrap" style="max-height:360px;overflow:auto">
+        <table>
+          <thead><tr><th>Date</th><th>Type</th><th>From</th><th>To</th><th class="num">Amount</th><th>Category</th><th>Remarks</th></tr></thead>
+          <tbody id="acctBody"></tbody>
+        </table>
+      </div>
+      <div class="modal-actions" style="margin-top:12px">
+        <button class="btn" id="mClose2">Close</button>
       </div>
     `;
-  }).join('');
+    openModal(html, true);
 
-  openModal(`
-    <div class="modal-close-row">
-      <h3 class="modal-title">${escapeHtml(g.debtor)}</h3>
-      <button class="modal-x" id="mClose">✕</button>
-    </div>
-    <div class="view-sub" style="margin-bottom:10px">Code: <span style="font-family:var(--font-mono)">${escapeHtml(g.code)}</span></div>
-    <div class="loan-summary-grid" id="loanSummaryGrid">
-      <div>Account<b>${escapeHtml(g.account)}</b></div>
-      <div>Date Released<b>${fmtDate(g.date)}</b></div>
-      <div>Principal<b>${fmtMoney(g.principal)}</b></div>
-      <div>Fees<b>${fmtMoney(g.fees)}</b></div>
-      <div>Interest<b>${fmtMoney(g.interest)}</b></div>
-      <div>Interest Rate<b>${escapeHtml(info.interestRate)}%</b></div>
-      <div>Total Payable<b>${fmtMoney(total)}</b></div>
-      <div>Frequency<b>${escapeHtml(info.frequency)}</b></div>
-      <div>Start Payment<b>${fmtDate(info.startPaymentDate || g.date)}</b></div>
-      <div id="paidToDateDisplay">Paid to Date<b>${fmtMoney(paid)}</b></div>
-      <div id="balanceDisplay">Balance<b>${fmtMoney(balance)}</b></div>
-    </div>
-    ${info.userRemarks ? `<div class="hint" style="margin-bottom:10px">Remarks: ${escapeHtml(info.userRemarks)}</div>` : ''}
-    <div style="max-height:340px;overflow-y:auto" id="scheduleList">
-      ${rowsHtml || '<div class="hint">No repayment schedule.</div>'}
-    </div>
-    <div class="modal-actions">
-      <button type="button" class="btn" id="btnEditLoan">Edit Loan</button>
-      <button type="button" class="btn" id="btnViewAllTx">View All Transactions</button>
-      <button type="button" class="btn" id="mClose2">Close</button>
-    </div>
-  `, true);
+    document.getElementById('mClose').addEventListener('click', closeModal);
+    document.getElementById('mClose2').addEventListener('click', closeModal);
 
-  document.getElementById('mClose').addEventListener('click', closeModal);
-  document.getElementById('mClose2').addEventListener('click', closeModal);
-  document.getElementById('btnEditLoan').addEventListener('click', () => { closeModal(); openLoanForm(g); });
-  document.getElementById('btnViewAllTx').addEventListener('click', () => openLoanTransactions(g.code));
+    function populate(){
+      const tp = document.getElementById('accFilterType').value;
+      const fr = document.getElementById('accFilterFrom').value;
+      const to = document.getElementById('accFilterTo').value;
+      const cat = document.getElementById('accFilterCategory').value;
+      const s = document.getElementById('acctStart').value;
+      const e = document.getElementById('acctEnd').value;
+      start = s; end = e; typeFilter = tp; fromFilter = fr; toFilter = to; categoryFilter = cat;
+      let rows = all.filter(t => {
+        if (!t.date) return true;
+        if (start && t.date < start) return false;
+        if (end && t.date > end) return false;
+        return true;
+      });
+      if (tp) rows = rows.filter(r => r.transactionType === tp);
+      if (fr) rows = rows.filter(r => r.fromAccount === fr);
+      if (to) rows = rows.filter(r => r.toAccount === to);
+      if (cat) rows = rows.filter(r => (r.category || '') === cat);
+      rows = rows.slice().sort((a,b) => (b.date||'').localeCompare(a.date||''));
+      const body = rows.map(t => `
+        <tr data-id="${t.id}">
+          <td>${fmtDate(t.date)}</td>
+          <td>${escapeHtml(t.transactionType)}</td>
+          <td>${escapeHtml(t.fromAccount || '—')}</td>
+          <td>${escapeHtml(t.toAccount || '—')}</td>
+          <td class="num">${fmtMoney(t.amount)}</td>
+          <td>${escapeHtml(t.category || '')}</td>
+          <td>${escapeHtml(t.remarks || '')}</td>
+        </tr>
+      `).join('') || `<tr class="empty-row"><td colspan="7">No transactions for ${escapeHtml(account)} in this range.</td></tr>`;
+      document.getElementById('acctBody').innerHTML = body;
 
-  document.querySelectorAll('#scheduleList .paidbox').forEach(box => {
-    box.addEventListener('change', async (e) => {
-      const row = box.closest('.schedule-row');
-      const seq = row.dataset.seq;
-      const scheduleRow = schedule.find(s => String(s.seq) === seq);
-      let date = row.dataset.date;
-      if (scheduleRow.flexible){
-        date = row.querySelector('.sdate-input').value;
-        if (!date){ toast('Pick a date first'); box.checked = false; return; }
-      }
-      if (box.checked){
-        const addInput = row.querySelector('.sadd input');
-        const addAmount = parseMoney(addInput.value);
-        const records = [{
-          date, transactionType:'Loan Payment', fromAccount:g.debtor, toAccount:g.account,
-          code: g.code, amount: info.repaymentAmount, category:'Payment', subCategory:'', remarks:''
-        }];
-        if (addAmount > 0){
-          records.push({
-            date, transactionType:'Loan Payment', fromAccount:g.debtor, toAccount:g.account,
-            code: g.code, amount: addAmount, category:'Additional Payment', subCategory:'', remarks:''
+      // wire row clicks to edit
+      document.querySelectorAll('#acctBody tr[data-id]').forEach(row => {
+        row.addEventListener('click', (e) => {
+          if (e.target.closest('.icon-btn')) return;
+          const id = Number(row.dataset.id);
+          const tx = allTx.find(x => x.id === id);
+          if (!tx) return;
+          openEditTransaction(tx, async () => {
+            await reload();
+            render(); // refresh modal after edit
           });
-        }
-        await dbAddMany(records);
-        toast('Payment recorded');
-      } else {
-        const ids = allTx.filter(t => t.transactionType==='Loan Payment' && t.code===g.code && t.date===date).map(t=>t.id);
-        await dbDeleteIds(ids);
-        toast('Payment reverted');
-      }
-      await reload();
-      const allPayments = allTx.filter(t => t.transactionType === 'Loan Payment' && t.code === code);
-      const paidLines = date ? allPayments.filter(p => p.date === date) : [];
-      const isPaid = paidLines.some(p => p.category === 'Payment');
-      const addAmt = paidLines.find(p => p.category === 'Additional Payment');
-      row.classList.toggle('paid', isPaid);
-      const chk = row.querySelector('.paidbox');
-      const addInput = row.querySelector('.sadd input');
-      chk.checked = isPaid;
-      const sdateInput = row.querySelector('.sdate-input');
-      if (sdateInput) sdateInput.disabled = isPaid;
-      addInput.disabled = isPaid;
-      addInput.value = addAmt ? fmtMoney(addAmt.amount) : '';
-      const newPaid = loanPaid(code);
-      const newBalance = total - newPaid;
-      document.getElementById('paidToDateDisplay').innerHTML = `Paid to Date<b>${fmtMoney(newPaid)}</b>`;
-      document.getElementById('balanceDisplay').innerHTML = `Balance<b>${fmtMoney(newBalance)}</b>`;
-      renderLoan();
+        });
+      });
+    }
+
+    document.getElementById('acctApply').addEventListener('click', populate);
+    document.getElementById('acctClear').addEventListener('click', () => {
+      start = earliestDateRecorded(); end = todayStr(); typeFilter = ''; fromFilter=''; toFilter=''; categoryFilter='';
+      render();
     });
-  });
+
+    populate();
+  }
+
+  render();
 }
 
 /* ------------------------------- Boot -------------------------------------- */
