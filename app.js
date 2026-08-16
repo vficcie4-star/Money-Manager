@@ -1820,6 +1820,300 @@ function openEditTransaction(tx, onSaved){
 }
 
 /* =============================================================================
+   Loan Add/Edit form + Loan schedule/detail modal (restored from prior version)
+   ============================================================================= */
+function dateOptions(defaultVal=1){
+  let opts = '';
+  for (let i=1;i<=30;i++) opts += `<option value="${i}" ${i===defaultVal?'selected':''}>${i}</option>`;
+  return opts;
+}
+
+function openLoanForm(editing=null){
+  const releases = allTx.filter(t => t.transactionType === 'Loan Release');
+  const debtors = uniq(releases.map(t => t.toAccount));
+  const accounts = uniq(releases.map(t => t.fromAccount));
+  const info = editing ? parseLoanRemarks(editing.remarksRaw) : null;
+
+  openModal(`
+    <div class="modal-close-row">
+      <h3 class="modal-title">${editing ? 'Edit Loan' : 'Add Loan'}</h3>
+      <button class="modal-x" id="mClose">✕</button>
+    </div>
+    <form id="loanForm">
+      <div class="field-row">
+        <div class="field"><label>Date Released</label><input type="date" name="date" value="${editing?editing.date:todayStr()}" required></div>
+        <div class="field">
+          <label>Code${editing?'':' (auto)'}</label>
+          <input type="text" id="codePreview" readonly style="background:#F1EFE6;color:#8A6A2A;font-family:var(--font-mono);" value="${editing?escapeHtml(editing.code):''}">
+        </div>
+      </div>
+      <div class="field-row">
+        <div class="field">
+          <label>Debtor</label>
+          <input type="text" name="debtor" id="fDebtor" autocomplete="off" value="${editing?escapeHtml(editing.debtor):''}" required>
+          <div class="autocomplete-list" id="acDebtor"></div>
+        </div>
+        <div class="field">
+          <label>Account</label>
+          <input type="text" name="account" id="fAccount" autocomplete="off" value="${editing?escapeHtml(editing.account):''}" required>
+          <div class="autocomplete-list" id="acAccount"></div>
+        </div>
+      </div>
+      <div class="field-row">
+        <div class="field"><label>Amount</label><input type="text" name="amount" id="fAmount" placeholder="0.00" value="${editing?fmtMoney(editing.principal):''}" required></div>
+        <div class="field"><label>Fees</label><input type="text" name="fees" id="fFees" placeholder="0.00" value="${editing?fmtMoney(editing.fees):''}"></div>
+        <div class="field"><label>Interest</label><input type="text" name="interest" id="fInterest" placeholder="0.00" value="${editing?fmtMoney(editing.interest):''}"></div>
+      </div>
+      <div class="field-row">
+        <div class="field"><label>Monthly Interest Rate (%)</label><input type="text" name="interestRate" placeholder="e.g. 5" value="${editing?escapeHtml(info.interestRate):''}"></div>
+        <div class="field"><label>Repayment Amount</label><input type="text" name="repaymentAmount" placeholder="0.00" value="${editing?fmtMoney(info.repaymentAmount):''}" required></div>
+      </div>
+      <div class="field">
+        <label>Repayment Frequency</label>
+        <div class="radio-group" id="freqGroup">
+          <button type="button" class="radio-chip${(!editing||info.frequency==='Monthly')?' active':''}" data-freq="Monthly">Monthly</button>
+          <button type="button" class="radio-chip${(editing&&info.frequency==='Semi-Monthly')?' active':''}" data-freq="Semi-Monthly">Semi-Monthly</button>
+          <button type="button" class="radio-chip${(editing&&info.frequency==='Flexible')?' active':''}" data-freq="Flexible">Flexible</button>
+        </div>
+        <input type="hidden" name="frequency" value="${editing?info.frequency:'Monthly'}">
+      </div>
+      <div class="field-row">
+        <div class="field"><label>Repayment Count</label><input type="number" name="repaymentCount" min="1" value="${editing?info.count:''}" required></div>
+        <div class="field"><label>Start Payment Date</label><input type="date" name="startPaymentDate" value="${editing?(info.startPaymentDate||editing.date):todayStr()}"></div>
+      </div>
+      <div class="field-row">
+        <div class="field" id="dateField1"><label>Repayment Date</label>
+          <select name="repayDate1">${dateOptions(editing && info.frequency!=='Flexible' ? (parseInt(info.dateSpec.split(',')[0])||1) : 1)}</select>
+        </div>
+        <div class="field" id="dateField2" style="display:none"><label>2nd Repayment Date</label>
+          <select name="repayDate2">${dateOptions(editing && info.frequency==='Semi-Monthly' ? (parseInt(info.dateSpec.split(',')[1])||15) : 15)}</select>
+        </div>
+      </div>
+      <div class="field"><label>Remarks</label><textarea name="remarks">${editing?escapeHtml(info.userRemarks):''}</textarea></div>
+      <div class="modal-actions">
+        <button type="button" class="btn" id="mCancel">Cancel</button>
+        <button type="submit" class="btn btn-primary loan">Save Loan</button>
+      </div>
+    </form>
+  `, true);
+
+  const form = document.getElementById('loanForm');
+  wireMoneyInput(document.getElementById('fAmount'));
+  wireMoneyInput(document.getElementById('fFees'));
+  wireMoneyInput(document.getElementById('fInterest'));
+  wireMoneyInput(form.repaymentAmount);
+  if (editing){
+    document.getElementById('fAmount').dataset.raw = editing.principal;
+    document.getElementById('fFees').dataset.raw = editing.fees;
+    document.getElementById('fInterest').dataset.raw = editing.interest;
+    form.repaymentAmount.dataset.raw = info.repaymentAmount;
+  }
+
+  attachAutocomplete(document.getElementById('fDebtor'), document.getElementById('acDebtor'), () => debtors);
+  attachAutocomplete(document.getElementById('fAccount'), document.getElementById('acAccount'), () => accounts);
+
+  function updateCodePreview(){
+    if (editing) return;
+    const d = document.getElementById('fDebtor').value.trim() || '—';
+    const a = document.getElementById('fAccount').value.trim() || '—';
+    const amt = document.getElementById('fAmount').dataset.raw || document.getElementById('fAmount').value || '0';
+    document.getElementById('codePreview').value = `${a}-${d}-${amt}`;
+  }
+  ['input','change','blur'].forEach(ev => {
+    document.getElementById('fDebtor').addEventListener(ev, updateCodePreview);
+    document.getElementById('fAccount').addEventListener(ev, updateCodePreview);
+    document.getElementById('fAmount').addEventListener(ev, updateCodePreview);
+  });
+
+  let freq = editing ? info.frequency : 'Monthly';
+  document.getElementById('dateField1').style.display = freq === 'Flexible' ? 'none' : '';
+  document.getElementById('dateField2').style.display = freq === 'Semi-Monthly' ? '' : 'none';
+  document.querySelectorAll('#freqGroup .radio-chip').forEach(chip => {
+    chip.addEventListener('click', () => {
+      document.querySelectorAll('#freqGroup .radio-chip').forEach(c => c.classList.remove('active'));
+      chip.classList.add('active');
+      freq = chip.dataset.freq;
+      form.frequency.value = freq;
+      document.getElementById('dateField1').style.display = freq === 'Flexible' ? 'none' : '';
+      document.getElementById('dateField2').style.display = freq === 'Semi-Monthly' ? '' : 'none';
+    });
+  });
+
+  document.getElementById('mClose').addEventListener('click', closeModal);
+  document.getElementById('mCancel').addEventListener('click', closeModal);
+
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const debtor = form.debtor.value.trim();
+    const account = form.account.value.trim();
+    const amount = moneyVal(document.getElementById('fAmount'));
+    const fees = moneyVal(document.getElementById('fFees'));
+    const interest = moneyVal(document.getElementById('fInterest'));
+    const repaymentAmount = moneyVal(form.repaymentAmount);
+    const interestRate = form.interestRate.value.trim();
+    const repaymentCount = form.repaymentCount.value.trim();
+    const startPaymentDate = form.startPaymentDate.value || form.date.value;
+
+    let dateSpec = '';
+    if (freq === 'Monthly') dateSpec = form.repayDate1.value;
+    else if (freq === 'Semi-Monthly') dateSpec = `${form.repayDate1.value},${form.repayDate2.value}`;
+
+    let code;
+    if (editing){
+      code = editing.code;
+    } else {
+      code = `${account}-${debtor}-${amount}`;
+      let suffix = 1;
+      const existingCodes = new Set(allTx.map(t => t.code));
+      let candidate = code;
+      while (existingCodes.has(candidate)){ suffix++; candidate = `${code}-${suffix}`; }
+      code = candidate;
+    }
+
+    const combinedRemarks = [interestRate, repaymentAmount, freq, repaymentCount, dateSpec, startPaymentDate, form.remarks.value.trim()].join('|');
+
+    const records = [
+      { date: form.date.value, transactionType:'Loan Release', fromAccount:account, toAccount:debtor,
+        code, amount: amount - fees, category:'Net Amount', subCategory:'', remarks: combinedRemarks },
+      { date: form.date.value, transactionType:'Loan Release', fromAccount:account, toAccount:debtor,
+        code, amount: fees, category:'Fees', subCategory:'', remarks:'' },
+      { date: form.date.value, transactionType:'Loan Release', fromAccount:account, toAccount:debtor,
+        code, amount: interest, category:'Interest', subCategory:'', remarks:'' }
+    ];
+
+    if (editing){
+      const oldIds = allTx.filter(t => t.transactionType==='Loan Release' && t.code === editing.code).map(t=>t.id);
+      await dbDeleteIds(oldIds);
+    }
+    await dbAddMany(records);
+    await reload();
+    closeModal();
+    toast(editing ? 'Loan updated' : 'Loan saved');
+    renderLoan();
+  });
+}
+
+function openLoanDetail(code){
+  const g = loanGroups().find(x => x.code === code);
+  if (!g) return;
+  const info = parseLoanRemarks(g.remarksRaw);
+  const schedule = buildSchedule(g, info);
+  const payments = allTx.filter(t => t.transactionType === 'Loan Payment' && t.code === code);
+  const total = g.principal + g.interest;
+  const paid = loanPaid(code);
+  const balance = total - paid;
+
+  function findPaidRow(date){
+    return payments.filter(p => p.date === date);
+  }
+
+  const rowsHtml = schedule.map(row => {
+    const paidLines = row.date ? findPaidRow(row.date) : [];
+    const isPaid = paidLines.some(p => p.category === 'Payment');
+    const addAmt = paidLines.find(p => p.category === 'Additional Payment');
+    return `
+      <div class="schedule-row ${isPaid?'paid':''}" data-seq="${row.seq}" data-date="${row.date}">
+        <span class="seq">${row.seq}</span>
+        ${row.flexible
+          ? `<input type="date" class="sdate-input" style="width:130px" value="${row.date||''}" ${isPaid?'disabled':''}>`
+          : `<span class="sdate">${fmtDate(row.date)}</span>`}
+        <span class="samt">${fmtMoney(info.repaymentAmount)}</span>
+        <span class="sadd"><input type="text" placeholder="Additional" value="${addAmt?fmtMoney(addAmt.amount):''}" ${isPaid?'disabled':''}></span>
+        <label style="display:flex;align-items:center;gap:5px;font-size:12px;color:var(--text-dim)">
+          <input type="checkbox" class="paidbox" ${isPaid?'checked':''}> Paid
+        </label>
+      </div>
+    `;
+  }).join('');
+
+  openModal(`
+    <div class="modal-close-row">
+      <h3 class="modal-title">${escapeHtml(g.debtor)}</h3>
+      <button class="modal-x" id="mClose">✕</button>
+    </div>
+    <div class="view-sub" style="margin-bottom:10px">Code: <span style="font-family:var(--font-mono)">${escapeHtml(g.code)}</span></div>
+    <div class="loan-summary-grid" id="loanSummaryGrid">
+      <div>Account<b>${escapeHtml(g.account)}</b></div>
+      <div>Date Released<b>${fmtDate(g.date)}</b></div>
+      <div>Principal<b>${fmtMoney(g.principal)}</b></div>
+      <div>Fees<b>${fmtMoney(g.fees)}</b></div>
+      <div>Interest<b>${fmtMoney(g.interest)}</b></div>
+      <div>Interest Rate<b>${escapeHtml(info.interestRate)}%</b></div>
+      <div>Total Payable<b>${fmtMoney(total)}</b></div>
+      <div>Frequency<b>${escapeHtml(info.frequency)}</b></div>
+      <div>Start Payment<b>${fmtDate(info.startPaymentDate || g.date)}</b></div>
+      <div id="paidToDateDisplay">Paid to Date<b>${fmtMoney(paid)}</b></div>
+      <div id="balanceDisplay">Balance<b>${fmtMoney(balance)}</b></div>
+    </div>
+    ${info.userRemarks ? `<div class="hint" style="margin-bottom:10px">Remarks: ${escapeHtml(info.userRemarks)}</div>` : ''}
+    <div style="max-height:340px;overflow-y:auto" id="scheduleList">
+      ${rowsHtml || '<div class="hint">No repayment schedule.</div>'}
+    </div>
+    <div class="modal-actions">
+      <button type="button" class="btn" id="btnEditLoan">Edit Loan</button>
+      <button type="button" class="btn" id="btnViewTx">View Transactions</button>
+      <button type="button" class="btn" id="mClose2">Close</button>
+    </div>
+  `, true);
+
+  document.getElementById('mClose').addEventListener('click', closeModal);
+  document.getElementById('mClose2').addEventListener('click', closeModal);
+  document.getElementById('btnEditLoan').addEventListener('click', () => { closeModal(); openLoanForm(g); });
+  document.getElementById('btnViewTx').addEventListener('click', () => { closeModal(); openLoanTransactions(g.code); });
+
+  document.querySelectorAll('#scheduleList .paidbox').forEach(box => {
+    box.addEventListener('change', async (e) => {
+      const row = box.closest('.schedule-row');
+      const seq = row.dataset.seq;
+      const scheduleRow = schedule.find(s => String(s.seq) === seq);
+      let date = row.dataset.date;
+      if (scheduleRow.flexible){
+        date = row.querySelector('.sdate-input').value;
+        if (!date){ toast('Pick a date first'); box.checked = false; return; }
+      }
+      if (box.checked){
+        const addInput = row.querySelector('.sadd input');
+        const addAmount = parseMoney(addInput.value);
+        const records = [{
+          date, transactionType:'Loan Payment', fromAccount:g.debtor, toAccount:g.account,
+          code: g.code, amount: info.repaymentAmount, category:'Payment', subCategory:'', remarks:''
+        }];
+        if (addAmount > 0){
+          records.push({
+            date, transactionType:'Loan Payment', fromAccount:g.debtor, toAccount:g.account,
+            code: g.code, amount: addAmount, category:'Additional Payment', subCategory:'', remarks:''
+          });
+        }
+        await dbAddMany(records);
+        toast('Payment recorded');
+      } else {
+        const ids = allTx.filter(t => t.transactionType==='Loan Payment' && t.code===g.code && t.date===date).map(t=>t.id);
+        await dbDeleteIds(ids);
+        toast('Payment reverted');
+      }
+      await reload();
+      const allPayments = allTx.filter(t => t.transactionType === 'Loan Payment' && t.code === code);
+      const paidLines = date ? allPayments.filter(p => p.date === date) : [];
+      const isPaid = paidLines.some(p => p.category === 'Payment');
+      const addAmt = paidLines.find(p => p.category === 'Additional Payment');
+      row.classList.toggle('paid', isPaid);
+      const chk = row.querySelector('.paidbox');
+      const addInput = row.querySelector('.sadd input');
+      chk.checked = isPaid;
+      const sdateInput = row.querySelector('.sdate-input');
+      if (sdateInput) sdateInput.disabled = isPaid;
+      addInput.disabled = isPaid;
+      addInput.value = addAmt ? fmtMoney(addAmt.amount) : '';
+      const newPaid = loanPaid(code);
+      const newBalance = total - newPaid;
+      document.getElementById('paidToDateDisplay').innerHTML = `Paid to Date<b>${fmtMoney(newPaid)}</b>`;
+      document.getElementById('balanceDisplay').innerHTML = `Balance<b>${fmtMoney(newBalance)}</b>`;
+      renderLoan();
+    });
+  });
+}
+
+/* =============================================================================
    Account modal (clicked from Report) — shows transactions with header filters and editable rows
    ============================================================================= */
 function openAccountModal(account){
